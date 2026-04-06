@@ -46,8 +46,10 @@ import { State, GamePhase, GameWinner } from '../game/store/state/state';
 import { Action } from '../game/store/actions/action';
 import { AddPlayerAction } from '../game/store/actions/add-player-action';
 import { ResolvePromptAction } from '../game/store/actions/resolve-prompt-action';
-import { PlayerType, SlotType } from '../game/store/actions/play-card-action';
+import { PlayCardAction, PlayerType, SlotType, CardTarget } from '../game/store/actions/play-card-action';
+import { PassTurnAction, AttackAction, RetreatAction, UseAbilityAction } from '../game/store/actions/game-actions';
 import { Prompt } from '../game/store/prompts/prompt';
+import { GameError } from '../game/game-error';
 import { ShuffleDeckPrompt } from '../game/store/prompts/shuffle-prompt';
 import { CoinFlipPrompt } from '../game/store/prompts/coin-flip-prompt';
 import { ChooseCardsPrompt } from '../game/store/prompts/choose-cards-prompt';
@@ -155,17 +157,228 @@ export class Env {
   }
 
   /**
-   * STUB — implemented in Task 4.
+   * Apply an action and return the resulting EnvState. Never throws.
+   *
+   * Behavior on errors:
+   *   - GameError (illegal action)  → returns input state unchanged, info.error set
+   *   - Other exception (crash)     → returns input state unchanged, info.crashed=true
+   *   - Successful dispatch         → auto-resolves any prompts the action created,
+   *                                    returns the new state with done/reward computed
+   *
+   * After successful step(), state.prompts is always empty OR the game is terminal.
+   * The caller never sees mid-turn prompt state.
    */
-  public step(_envState: EnvState, _action: Action): StepResult {
-    throw new Error('Env.step: not yet implemented (lands in plan 01-01 Task 4)');
+  public step(envState: EnvState, action: Action): StepResult {
+    // Defensive: if the input state has unresolved prompts, that's a bug
+    // upstream — Env consumers should never see prompts. Refuse the step.
+    if (envState.state.prompts.some(p => p.result === undefined)) {
+      return {
+        state: envState,
+        reward: 0,
+        done: this.isTerminal(envState),
+        info: { error: 'input state has unresolved prompts; not allowed in Env API' }
+      };
+    }
+
+    // Game already over — refuse to advance.
+    if (this.isTerminal(envState)) {
+      return {
+        state: envState,
+        reward: 0,
+        done: true,
+        info: { error: 'game already terminal' }
+      };
+    }
+
+    // Try to dispatch. The Store's reduce() backs up state internally before
+    // calling reducers and restores it on throw, so the underlying store.state
+    // is unchanged on a GameError.
+    let crashed = false;
+    let errorMsg: string | undefined;
+    try {
+      envState.store.dispatch(action);
+    } catch (err) {
+      const isGameError = err instanceof GameError ||
+        (err && (err as any).constructor && (err as any).constructor.name === 'GameError');
+      errorMsg = err && (err as any).message ? (err as any).message : String(err);
+      if (!isGameError) {
+        crashed = true;
+        // Log non-GameError crashes to stderr regardless of DEBUG. The harness
+        // will count these but we want them visible in interactive runs too.
+        console.error('[env.step] non-GameError crash:', err);
+      }
+      // Refresh state pointer (the store may have restored it from backup).
+      envState.state = envState.store.state;
+      return {
+        state: envState,
+        reward: 0,
+        done: false,
+        info: crashed ? { crashed: true, error: errorMsg } : { error: errorMsg }
+      };
+    }
+
+    // Successful dispatch — refresh state pointer and auto-resolve prompts.
+    envState.state = envState.store.state;
+    let promptsResolved = 0;
+    try {
+      promptsResolved = this.resolvePromptsLoop(envState, /* isSetup */ false);
+    } catch (err) {
+      const isGameError = err instanceof GameError ||
+        (err && (err as any).constructor && (err as any).constructor.name === 'GameError');
+      const msg = err && (err as any).message ? (err as any).message : String(err);
+      if (!isGameError) {
+        crashed = true;
+        console.error('[env.step] non-GameError crash during prompt resolution:', err);
+      }
+      // The store may now be in an inconsistent state. Best effort: return what
+      // we have and flag the crash. Self-play harness will discard this game.
+      envState.state = envState.store.state;
+      return {
+        state: envState,
+        reward: 0,
+        done: this.isTerminal(envState),
+        info: crashed ? { crashed: true, error: msg, promptsResolved } : { error: msg, promptsResolved }
+      };
+    }
+
+    envState.state = envState.store.state;
+
+    // Compute reward and done.
+    const done = this.isTerminal(envState);
+    let reward = 0;
+    if (done) {
+      const winner = this.winner(envState);
+      // Reward is +1 for player-0 winner, -1 for player-1 winner, 0 for draw.
+      // Bots can negate as needed for side-relative reward.
+      if (winner === null) {
+        reward = 0;
+      } else {
+        reward = winner === 0 ? 1 : -1;
+      }
+    }
+
+    return {
+      state: envState,
+      reward,
+      done,
+      info: { promptsResolved }
+    };
   }
 
   /**
-   * STUB — implemented in Task 4.
+   * Enumerate plausibly legal actions. Over-enumeration is OK because step()
+   * gracefully handles illegal actions (returns unchanged state with error).
+   *
+   * Phase 1 returns a coarse set:
+   *   - PassTurnAction (always)
+   *   - PlayCardAction for each card in active player's hand, with a
+   *     reasonable default target (active for energy/evolution, first empty
+   *     bench for basic Pokemon, board for trainers)
+   *   - AttackAction for each attack on the active Pokemon
+   *   - RetreatAction for each non-empty bench slot
+   *   - UseAbilityAction for the active Pokemon's abilities (and bench
+   *     Pokemon abilities — over-enumerated)
+   *
+   * The bot/encoder layer in plan 01-02+ will refine this to a true legal
+   * action set with proper target enumeration.
    */
-  public legalActions(_envState: EnvState): Action[] {
-    throw new Error('Env.legalActions: not yet implemented (lands in plan 01-01 Task 4)');
+  public legalActions(envState: EnvState): Action[] {
+    const state = envState.state;
+    const actions: Action[] = [];
+
+    // Defensive: if the game is terminal there are no legal actions.
+    if (this.isTerminal(envState)) {
+      return actions;
+    }
+
+    // Defensive: if the state has unresolved prompts (shouldn't happen since
+    // step auto-resolves), return only PassTurn as a safe fallback.
+    if (state.prompts.some(p => p.result === undefined)) {
+      console.warn('[env.legalActions] state has unresolved prompts; returning PassTurn fallback');
+      const pid = state.players[state.activePlayer]?.id ?? PLAYER_A_ID;
+      actions.push(new PassTurnAction(pid));
+      return actions;
+    }
+
+    const player = state.players[state.activePlayer];
+    if (player === undefined) {
+      return actions;
+    }
+    const pid = player.id;
+
+    // 1. Always include PassTurnAction.
+    actions.push(new PassTurnAction(pid));
+
+    // 2. PlayCardAction for each card in hand. Pick a default target based on
+    //    card class (Energy → active, Pokemon basic → first empty bench,
+    //    Trainer → board, Pokemon evolution → active).
+    for (let i = 0; i < player.hand.cards.length; i++) {
+      const card = player.hand.cards[i];
+      const target = this.defaultTargetForCard(player, card);
+      actions.push(new PlayCardAction(pid, i, target));
+    }
+
+    // 3. AttackAction for each attack on the active Pokemon.
+    const activePokemon = player.active.getPokemonCard();
+    if (activePokemon !== undefined) {
+      for (const attack of activePokemon.attacks) {
+        actions.push(new AttackAction(pid, attack.name));
+      }
+      // 4. UseAbilityAction for active Pokemon's abilities.
+      for (const power of activePokemon.powers) {
+        actions.push(new UseAbilityAction(pid, power.name, {
+          player: PlayerType.BOTTOM_PLAYER, slot: SlotType.ACTIVE, index: 0
+        }));
+      }
+    }
+
+    // 5. UseAbilityAction for each benched Pokemon's abilities (over-enumerate).
+    for (let i = 0; i < player.bench.length; i++) {
+      const benchPokemon = player.bench[i].getPokemonCard();
+      if (benchPokemon !== undefined) {
+        for (const power of benchPokemon.powers) {
+          actions.push(new UseAbilityAction(pid, power.name, {
+            player: PlayerType.BOTTOM_PLAYER, slot: SlotType.BENCH, index: i
+          }));
+        }
+      }
+    }
+
+    // 6. RetreatAction for each non-empty bench slot.
+    for (let i = 0; i < player.bench.length; i++) {
+      if (player.bench[i].cards.length > 0) {
+        actions.push(new RetreatAction(pid, i));
+      }
+    }
+
+    return actions;
+  }
+
+  /**
+   * Pick a default CardTarget for a card based on its type. This is best-effort;
+   * step() will tolerate INVALID_TARGET via the GameError catch.
+   */
+  private defaultTargetForCard(player: Player, card: Card): CardTarget {
+    // SuperType: 1 = POKEMON, 2 = TRAINER, 3 = ENERGY (per card-types.ts).
+    if (card === undefined) {
+      return { player: PlayerType.BOTTOM_PLAYER, slot: SlotType.ACTIVE, index: 0 };
+    }
+    if (card.superType === 3) {
+      // Energy → active by default.
+      return { player: PlayerType.BOTTOM_PLAYER, slot: SlotType.ACTIVE, index: 0 };
+    }
+    if (card.superType === 1) {
+      // Pokemon — try first empty bench (good for basics); fall back to active
+      // (good for evolutions). step() will return an error on invalid target;
+      // the bot can re-pick.
+      const emptyIdx = player.bench.findIndex(b => b.cards.length === 0);
+      if (emptyIdx !== -1) {
+        return { player: PlayerType.BOTTOM_PLAYER, slot: SlotType.BENCH, index: emptyIdx };
+      }
+      return { player: PlayerType.BOTTOM_PLAYER, slot: SlotType.ACTIVE, index: 0 };
+    }
+    // Trainer.
+    return { player: PlayerType.BOTTOM_PLAYER, slot: SlotType.BOARD, index: 0 };
   }
 
   /**
