@@ -70,6 +70,7 @@ import { TrainerCard } from '../game/store/card/trainer-card';
 import { Stage, TrainerType, SpecialCondition, CardType } from '../game/store/card/card-types';
 import { Player } from '../game/store/state/player';
 import { PokemonCardList } from '../game/store/state/pokemon-card-list';
+import { StateUtils } from '../game/store/state-utils';
 import { deepClone } from '../utils/utils';
 import { SeededRNG } from './seeded-rng';
 import { SeededArbiter } from './seeded-arbiter';
@@ -1025,15 +1026,28 @@ export class Env {
     //    `decode` step normally translates CardTarget[] → PokemonCardList[],
     //    but since we resolve directly, we pass PokemonCardList[] (the
     //    callback's expected input type).
+    //
+    //    IMPORTANT (added Plan 01-06): honor `prompt.options.blocked` here.
+    //    Rare Candy and other cards push wrong-line / invalid targets into
+    //    `blocked` and rely on the resolver to filter them. Without this
+    //    filter, the resolver can hand back a blocked PokemonCardList, the
+    //    prompt's validate() rejects it, and the card silently no-ops (the
+    //    L6 Rare Candy with a wrong-line bench test would have failed).
     if (prompt instanceof ChoosePokemonPrompt) {
       const player = state.players.find(p => p.id === prompt.playerId);
       const opponent = state.players.find(p => p.id !== prompt.playerId);
       if (player === undefined || opponent === undefined) {
         return new ResolvePromptAction(prompt.id, null);
       }
+      // Resolve blocked CardTargets to PokemonCardLists via StateUtils.getTarget
+      // (mirrors the validate() logic in choose-pokemon-prompt.ts).
+      const blockedLists = prompt.options.blocked.map(
+        b => StateUtils.getTarget(state, player, b)
+      );
       const candidates: PokemonCardList[] = [];
       const include = (cardList: PokemonCardList) => {
         if (cardList.cards.length === 0) return;
+        if (blockedLists.includes(cardList)) return;
         candidates.push(cardList);
       };
       const collectFor = (p: Player) => {

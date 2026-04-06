@@ -36,6 +36,7 @@ import { TrainerCard } from '../../../game/store/card/trainer-card';
 import { EnergyCard } from '../../../game/store/card/energy-card';
 import { TrainerType, SuperType, Stage } from '../../../game/store/card/card-types';
 import { CardManager } from '../../../game/cards/card-manager';
+import { StateUtils } from '../../../game/store/state-utils';
 import {
   PlayCardAction, PlayerType, SlotType, CardTarget
 } from '../../../game/store/actions/play-card-action';
@@ -588,8 +589,19 @@ function buildResolveAction(ctx: CardTestContext, prompt: Prompt<any>): ResolveP
     if (player === undefined || opp === undefined) {
       return new ResolvePromptAction(prompt.id, null);
     }
+    // Honor prompt.options.blocked (added Plan 01-06). Rare Candy etc.
+    // push wrong-line targets into `blocked` and rely on the resolver to
+    // filter them. Without this, the resolver may hand back a blocked list
+    // → validate() rejects → card silently no-ops.
+    const blockedLists = prompt.options.blocked.map(
+      b => StateUtils.getTarget(state, player, b)
+    );
     const candidates: PokemonCardList[] = [];
-    const include = (cl: PokemonCardList) => { if (cl.cards.length > 0) candidates.push(cl); };
+    const include = (cl: PokemonCardList) => {
+      if (cl.cards.length === 0) return;
+      if (blockedLists.includes(cl)) return;
+      candidates.push(cl);
+    };
     const collectFor = (p: Player) => {
       if (prompt.slots.includes(SlotType.ACTIVE)) include(p.active);
       if (prompt.slots.includes(SlotType.BENCH)) {
