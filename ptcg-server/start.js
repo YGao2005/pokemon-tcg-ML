@@ -6,6 +6,7 @@ const { SimpleBot } = require('./output/simple-bot/simple-bot');
 const { CardManager } = require('./output/game/cards/card-manager');
 const { StateSerializer } = require('./output/game/serializer/state-serializer');
 const { config } = require('./output/config');
+const { seedAllUsers } = require('./output/backend/services/default-decks');
 const sets = require('./output/sets');
 const process = require('process');
 
@@ -35,6 +36,7 @@ app.connectToDatabase()
     console.error(error.message);
     process.exit(1);
   })
+  .then(() => seedAllUsers())
   .then(() => app.configureBotManager(botManager))
   .then(() => app.start())
   .then(() => {

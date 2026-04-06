@@ -24,12 +24,8 @@ export class ApiInterceptor implements HttpInterceptor {
   ) { }
 
   private async tokenAlert() {
-    this.dialog.closeAll();
-    if (this.sessionService.session.loggedUserId) {
-      await this.alertService.alert(this.translate.instant('ERROR_SESSION_EXPIRED'));
-      this.sessionService.clear();
-      this.router.navigate(['/login']);
-    }
+    // Local-only mode: just log token issues, don't redirect to login
+    console.warn('Auth token invalid — local-only mode, ignoring.');
   }
 
   public intercept(request: HttpRequest<any>, next: HttpHandler): Observable<HttpEvent<any>> {

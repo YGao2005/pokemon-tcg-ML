@@ -41,9 +41,15 @@ export class PromptComponent implements OnChanges {
       differentGame = !previousState || previousState.localId !== this.gameState.localId;
     }
 
-    let prompt = this.gameState.state.prompts.find(p => {
-      return p.playerId === this.clientId && p.result === undefined;
-    });
+    let prompt: Prompt<any> | undefined;
+    if (this.gameState.sandboxMode) {
+      // In sandbox mode, show prompts for ANY player (we control both sides)
+      prompt = this.gameState.state.prompts.find(p => p.result === undefined);
+    } else {
+      prompt = this.gameState.state.prompts.find(p => {
+        return p.playerId === this.clientId && p.result === undefined;
+      });
+    }
 
     prompt = prompt || this.checkGameOver(this.gameState);
     const promptId = prompt ? prompt.id : -1;

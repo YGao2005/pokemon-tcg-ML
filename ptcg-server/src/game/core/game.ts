@@ -23,8 +23,12 @@ export class Game implements StoreHandler {
   private matchRecorder: MatchRecorder;
   private timeoutRef: NodeJS.Timeout | undefined;
 
+  public sandboxMode: boolean = false;
+  public sandboxPlayer2Id: number = 0;
+
   constructor(private core: Core, id: number, public gameSettings: GameSettings) {
     this.id = id;
+    this.sandboxMode = gameSettings.sandboxMode || false;
     this.store = new Store(this);
     this.store.state.rules = gameSettings.rules;
     this.matchRecorder = new MatchRecorder(core);
@@ -94,6 +98,13 @@ export class Game implements StoreHandler {
   public handleClientLeave(client: Client): void {
     const state = this.store.state;
     if (state.phase === GamePhase.FINISHED) {
+      return;
+    }
+
+    // In sandbox mode, don't abort the game when a client leaves.
+    // The single client controls both players; a brief socket reconnect
+    // should not end the game.
+    if (this.sandboxMode) {
       return;
     }
 

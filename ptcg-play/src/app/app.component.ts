@@ -1,7 +1,7 @@
 import { Component, OnInit, HostListener, ElementRef } from '@angular/core';
 import { MatDialog } from '@angular/material/dialog';
 import { UserInfo } from 'ptcg-server';
-import { Observable, interval } from 'rxjs';
+import { Observable, interval, Subject } from 'rxjs';
 import { Router } from '@angular/router';
 import { UntilDestroy, untilDestroyed } from '@ngneat/until-destroy';
 import { switchMap, filter } from 'rxjs/operators';
@@ -25,6 +25,7 @@ export class AppComponent implements OnInit {
   public isLoggedIn = false;
   public loggedUser: UserInfo | undefined;
   private authToken$: Observable<string>;
+  private loginAborted$ = new Subject<void>();
 
   constructor(
     private alertService: AlertService,
@@ -62,11 +63,11 @@ export class AppComponent implements OnInit {
     ).subscribe({
       next: async connected => {
         if (!connected && this.isLoggedIn) {
-          this.socketService.disable();
-          this.dialog.closeAll();
-          await this.alertService.alert(this.translate.instant('ERROR_DISCONNECTED_FROM_SERVER'));
-          this.sessionService.clear();
-          this.router.navigate(['/login']);
+          // Reconnect silently after a disconnect.
+          const token = this.sessionService.session.authToken;
+          if (token) {
+            this.socketService.enable(token);
+          }
         }
       }
     });
@@ -82,6 +83,68 @@ export class AppComponent implements OnInit {
         if (this.loginRememberService.token) {
           this.loginRememberService.rememberToken(response.token);
         }
+      }
+    });
+
+    // Local-only mode: auto-login as "player" on startup
+    this.autoLogin();
+  }
+
+  /**
+   * Auto-login for local-only solo play.
+   * Tries token login first (from localStorage), then login with player/player,
+   * then register + login if the user doesn't exist yet.
+   */
+  private autoLogin() {
+    const token = this.loginRememberService.token;
+    if (token) {
+      this.loginService.tokenLogin(token, this.loginAborted$).pipe(
+        untilDestroyed(this)
+      ).subscribe({
+        next: response => {
+          this.loginRememberService.rememberToken(response.token);
+        },
+        error: () => {
+          this.loginRememberService.rememberToken();
+          this.loginWithCredentials();
+        }
+      });
+    } else {
+      this.loginWithCredentials();
+    }
+  }
+
+  private loginWithCredentials() {
+    const name = 'player';
+    const password = 'player';
+
+    this.loginService.login(name, password, this.loginAborted$).pipe(
+      untilDestroyed(this)
+    ).subscribe({
+      next: response => {
+        this.loginRememberService.rememberToken(response.token);
+      },
+      error: () => {
+        // User doesn't exist yet — register then login
+        this.loginService.register(name, password, '', '').pipe(
+          untilDestroyed(this)
+        ).subscribe({
+          next: () => {
+            this.loginService.login(name, password, this.loginAborted$).pipe(
+              untilDestroyed(this)
+            ).subscribe({
+              next: response => {
+                this.loginRememberService.rememberToken(response.token);
+              },
+              error: err => {
+                console.error('Auto-login failed after register:', err);
+              }
+            });
+          },
+          error: err => {
+            console.error('Auto-register failed:', err);
+          }
+        });
       }
     });
   }

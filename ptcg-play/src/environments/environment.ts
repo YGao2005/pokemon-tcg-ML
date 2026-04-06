@@ -4,7 +4,7 @@
 
 export const environment = {
   apiUrl: 'http://localhost:12021',
-  timeout: 5000,
+  timeout: 15000,
   production: false,
   apiVersion: 2,
   defaultPageSize: 50,

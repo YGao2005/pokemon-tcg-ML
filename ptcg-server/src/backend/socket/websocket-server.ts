@@ -33,6 +33,16 @@ export class WebSocketServer {
       this.core.connect(socketClient);
       socketClient.attachListeners();
 
+      // Auto-rejoin orphaned sandbox games belonging to this user.
+      // Sandbox games survive client disconnects (see game.handleClientLeave)
+      // so the reconnecting client needs to be re-added.
+      for (const game of this.core.games) {
+        if (game.sandboxMode && game.clients.length === 0
+          && game.state.players.some(p => p.id === socketClient.id)) {
+          this.core.joinGame(socketClient, game);
+        }
+      }
+
       socket.on('disconnect', () => {
         this.core.disconnect(socketClient);
         user.updateLastSeen();

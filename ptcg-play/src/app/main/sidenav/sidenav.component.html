@@ -5,19 +5,8 @@
   <a routerLink="/deck" mat-list-item>
     {{ 'MAIN_DECKS' | translate }}
   </a>
-  <a routerLink="/ranking" mat-list-item>
-    {{ 'MAIN_RANKING' | translate }}
-  </a>
   <a routerLink="/replays" mat-list-item>
     {{ 'MAIN_REPLAYS' | translate }}
-  </a>
-  <a routerLink="/message" mat-list-item>
-    <span
-      [matBadge]="unreadMessages$ | async"
-      matBadgeOverlap="false"
-      [matBadgeHidden]="(unreadMessages$ | async) === 0">
-      {{ 'MAIN_MESSAGES' | translate }}
-    </span>
   </a>
 </mat-nav-list>
 

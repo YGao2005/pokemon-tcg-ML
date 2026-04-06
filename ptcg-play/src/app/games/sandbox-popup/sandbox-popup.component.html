@@ -1,0 +1,43 @@
+<h2 mat-dialog-title>Sandbox Mode</h2>
+
+<mat-dialog-content>
+
+  <p class="sandbox-description">
+    Play both sides of a game with full information.
+    All hands, prizes, and deck contents are visible.
+  </p>
+
+  <form #form="ngForm" autocomplete="off">
+
+    <!-- Player 1 Deck -->
+    <mat-form-field>
+      <mat-label>Player 1 Deck</mat-label>
+      <mat-select [(value)]="deck1Id">
+        <mat-option *ngFor="let option of decks" [value]="option.value">
+          {{option.viewValue}}
+        </mat-option>
+      </mat-select>
+    </mat-form-field>
+
+    <!-- Player 2 Deck -->
+    <mat-form-field>
+      <mat-label>Player 2 Deck</mat-label>
+      <mat-select [(value)]="deck2Id">
+        <mat-option *ngFor="let option of decks" [value]="option.value">
+          {{option.viewValue}}
+        </mat-option>
+      </mat-select>
+    </mat-form-field>
+
+  </form>
+
+</mat-dialog-content>
+
+<mat-dialog-actions>
+  <button mat-raised-button (click)="cancel()">
+    Cancel
+  </button>
+  <button mat-raised-button color="warn" (click)="confirm()" [disabled]="form.invalid">
+    Start Sandbox
+  </button>
+</mat-dialog-actions>

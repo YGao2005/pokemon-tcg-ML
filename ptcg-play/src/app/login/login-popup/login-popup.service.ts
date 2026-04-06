@@ -15,10 +15,8 @@ export class LoginPopupService {
   }
 
   openDialog(): void {
-    this.dialog.open(LoginPopupComponent, {
-      maxWidth: '350px',
-      data: { redirectUrl: this.redirectUrl }
-    });
+    // Local-only mode: don't show login dialog, just log a warning
+    console.warn('LoginPopupService.openDialog() called in local-only mode — suppressed.');
   }
 
 }

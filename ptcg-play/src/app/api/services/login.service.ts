@@ -94,11 +94,7 @@ export class LoginService {
     this.socketService.enable(token);
     return this.socketService.connection.pipe(
       filter(connected => connected),
-      timeout(environment.timeout),
-      catchError(error => {
-        this.socketService.disable();
-        throw error;
-      }));
+      timeout(environment.timeout));
   }
 
   public register(name: string, password: string, email: string, code?: string) {

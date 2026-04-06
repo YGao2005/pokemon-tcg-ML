@@ -123,7 +123,15 @@ export class PlayerBarComponent implements OnChanges {
       return session.users[replayPlayer.userId];
     }
     const client = session.clients.find(c => c.clientId === player.id);
-    return client !== undefined ? session.users[client.userId] : undefined;
+    if (client !== undefined) {
+      return session.users[client.userId];
+    }
+    // In sandbox mode, P2 has a synthetic clientId that won't match any real client.
+    // Return the logged-in user's info so P2 doesn't show as "Disconnected".
+    if (this.gameState && this.gameState.sandboxMode) {
+      return session.users[session.loggedUserId];
+    }
+    return undefined;
   }
 
 }

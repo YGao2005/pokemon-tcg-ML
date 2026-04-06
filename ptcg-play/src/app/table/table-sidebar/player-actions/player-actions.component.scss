@@ -16,3 +16,12 @@ $avatar-size: map-get($ptcg-size, avatar);
     margin-bottom: $ptcg-sidebar-tiny-padding;
   }
 }
+
+.sandbox-label {
+  text-align: center;
+  font-weight: bold;
+  font-size: 11px;
+  letter-spacing: 2px;
+  color: #ff9800;
+  padding: 4px 0;
+}

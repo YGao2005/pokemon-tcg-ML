@@ -46,6 +46,71 @@ export class GameService {
     });
   }
 
+  public createSandboxGame(deck1: string[], deck2: string[]): Observable<GameState> {
+    return new Observable<GameState>(observer => {
+      this.socketService.emit<any, GameState>('sandbox:createGame', { deck1, deck2 })
+        .pipe(finalize(() => observer.complete()))
+        .subscribe((gameState: GameState) => {
+          const localState = this.appendGameState(gameState);
+          if (localState) {
+            // Set sandbox-specific properties
+            const games = this.sessionService.session.gameStates.slice();
+            const index = games.findIndex(g => g.localId === localState.localId);
+            if (index !== -1) {
+              const state = games[index].state;
+              // Auto-switch to the first player with a pending prompt, or player 1
+              const unresolvedPrompts = state.prompts.filter(p => p.result === undefined);
+              let activePlayerId = state.players.length > 0 ? state.players[0].id : undefined;
+              if (unresolvedPrompts.length > 0) {
+                activePlayerId = unresolvedPrompts[0].playerId;
+              }
+              games[index] = {
+                ...games[index],
+                sandboxMode: true,
+                sandboxPlayer2Id: gameState.sandboxPlayer2Id,
+                sandboxActivePlayerId: activePlayerId
+              };
+              this.sessionService.set({ gameStates: games });
+            }
+          }
+          observer.next(gameState);
+        }, (error: any) => {
+          observer.error(error);
+        });
+    });
+  }
+
+  public switchSandboxPlayer(localGameId: number): void {
+    const games = this.sessionService.session.gameStates;
+    const index = games.findIndex(g => g.localId === localGameId);
+    if (index === -1 || !games[index].sandboxMode) {
+      return;
+    }
+    const game = games[index];
+    const players = game.state.players;
+    if (players.length < 2) {
+      return;
+    }
+    const currentId = game.sandboxActivePlayerId;
+    const newId = currentId === players[0].id ? players[1].id : players[0].id;
+    const gameStates = games.slice();
+    gameStates[index] = { ...game, sandboxActivePlayerId: newId };
+    this.sessionService.set({ gameStates });
+  }
+
+  /**
+   * Get the sandbox playerId to use for actions, if in sandbox mode.
+   * Returns undefined for non-sandbox games.
+   */
+  private getSandboxPlayerId(gameId: number): number | undefined {
+    const games = this.sessionService.session.gameStates;
+    const game = games.find(g => g.gameId === gameId && g.deleted === false);
+    if (game && game.sandboxMode && game.sandboxActivePlayerId !== undefined) {
+      return game.sandboxActivePlayerId;
+    }
+    return undefined;
+  }
+
   public appendGameState(gameState: GameState, replay?: Replay): LocalGameState | undefined {
     const gameId = gameState.gameId;
     const games = this.sessionService.session.gameStates;
@@ -127,17 +192,20 @@ export class GameService {
   }
 
   public ability(gameId: number, ability: string, target: CardTarget) {
-    this.socketService.emit('game:action:ability', { gameId, ability, target })
+    const playerId = this.getSandboxPlayerId(gameId);
+    this.socketService.emit('game:action:ability', { gameId, ability, target, playerId })
       .subscribe(() => {}, (error: ApiError) => this.handleError(error));
   }
 
   public attack(gameId: number, attack: string) {
-    this.socketService.emit('game:action:attack', { gameId, attack })
+    const playerId = this.getSandboxPlayerId(gameId);
+    this.socketService.emit('game:action:attack', { gameId, attack, playerId })
       .subscribe(() => {}, (error: ApiError) => this.handleError(error));
   }
 
   public stadium(gameId: number) {
-    this.socketService.emit('game:action:stadium', { gameId })
+    const playerId = this.getSandboxPlayerId(gameId);
+    this.socketService.emit('game:action:stadium', { gameId, playerId })
       .subscribe(() => {}, (error: ApiError) => this.handleError(error));
   }
 
@@ -152,37 +220,44 @@ export class GameService {
   }
 
   public playCardAction(gameId: number, handIndex: number, target: CardTarget) {
-    this.socketService.emit('game:action:playCard', {gameId, handIndex, target})
+    const playerId = this.getSandboxPlayerId(gameId);
+    this.socketService.emit('game:action:playCard', {gameId, handIndex, target, playerId})
       .subscribe(() => {}, (error: ApiError) => this.handleError(error));
   }
 
   public reorderBenchAction(gameId: number, from: number, to: number) {
-    this.socketService.emit('game:action:reorderBench', {gameId, from, to})
+    const playerId = this.getSandboxPlayerId(gameId);
+    this.socketService.emit('game:action:reorderBench', {gameId, from, to, playerId})
       .subscribe(() => {}, (error: ApiError) => this.handleError(error));
   }
 
   public reorderHandAction(gameId: number, order: number[]) {
-    this.socketService.emit('game:action:reorderHand', {gameId, order})
+    const playerId = this.getSandboxPlayerId(gameId);
+    this.socketService.emit('game:action:reorderHand', {gameId, order, playerId})
       .subscribe(() => {}, (error: ApiError) => this.handleError(error));
   }
 
   public retreatAction(gameId: number, to: number) {
-    this.socketService.emit('game:action:retreat', {gameId, to})
+    const playerId = this.getSandboxPlayerId(gameId);
+    this.socketService.emit('game:action:retreat', {gameId, to, playerId})
       .subscribe(() => {}, (error: ApiError) => this.handleError(error));
   }
 
   public passTurnAction(gameId: number) {
-    this.socketService.emit('game:action:passTurn', {gameId})
+    const playerId = this.getSandboxPlayerId(gameId);
+    this.socketService.emit('game:action:passTurn', {gameId, playerId})
       .subscribe(() => {}, (error: ApiError) => this.handleError(error));
   }
 
   public appendLogAction(gameId: number, message: string) {
-    this.socketService.emit('game:action:appendLog', {gameId, message})
+    const playerId = this.getSandboxPlayerId(gameId);
+    this.socketService.emit('game:action:appendLog', {gameId, message, playerId})
       .subscribe(() => {}, (error: ApiError) => this.handleError(error));
   }
 
   public changeAvatarAction(gameId: number, avatarName: string) {
-    this.socketService.emit('game:action:changeAvatar', {gameId, avatarName})
+    const playerId = this.getSandboxPlayerId(gameId);
+    this.socketService.emit('game:action:changeAvatar', {gameId, avatarName, playerId})
       .subscribe(() => {}, (error: ApiError) => this.handleError(error));
   }
 
@@ -207,6 +282,18 @@ export class GameService {
       const gameStates = this.sessionService.session.gameStates.slice();
       const logs = [ ...gameStates[index].logs, ...state.logs ];
       gameStates[index] = { ...gameStates[index], state, logs, playerStats };
+
+      // In sandbox mode, auto-switch to the active player when prompts arrive
+      if (gameStates[index].sandboxMode) {
+        const unresolvedPrompts = state.prompts.filter(p => p.result === undefined);
+        if (unresolvedPrompts.length > 0) {
+          gameStates[index] = {
+            ...gameStates[index],
+            sandboxActivePlayerId: unresolvedPrompts[0].playerId
+          };
+        }
+      }
+
       this.sessionService.set({ gameStates });
     }
   }

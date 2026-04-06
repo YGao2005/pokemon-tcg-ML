@@ -16,20 +16,27 @@ import { SetNewPasswordComponent } from './login/set-new-password/set-new-passwo
 import { TableComponent } from './table/table.component';
 
 const routes: Routes = [
-    { path: 'deck', component: DeckComponent, canActivate: [ CanActivateService ] },
-    { path: 'deck/:deckId', component: DeckEditComponent, canActivate: [ CanActivateService ] },
-    { path: 'games', component: GamesComponent, canActivate: [ CanActivateService ] },
-    { path: 'login', component: LoginComponent },
-    { path: 'message', redirectTo: 'message/', pathMatch: 'full' },
-    { path: 'message/:userId', component: MessagesComponent, canActivate: [ CanActivateService ] },
-    { path: 'ranking', component: RankingComponent, canActivate: [ CanActivateService ] },
-    { path: 'register', component: RegisterComponent },
-    { path: 'replays', component: ReplaysComponent, canActivate: [ CanActivateService ] },
-    { path: 'profile/:userId', component: ProfileComponent, canActivate: [ CanActivateService ] },
-    { path: 'reset-password', component: ResetPasswordComponent, pathMatch: 'full' },
-    { path: 'reset-password/:token', component: SetNewPasswordComponent },
-    { path: 'table/:gameId', component: TableComponent, canActivate: [ CanActivateService ] },
+    // Core gameplay routes — no auth guard needed in local-only mode
+    { path: 'games', component: GamesComponent },
+    { path: 'deck', component: DeckComponent },
+    { path: 'deck/:deckId', component: DeckEditComponent },
+    { path: 'table/:gameId', component: TableComponent },
+    { path: 'replays', component: ReplaysComponent },
+
+    // Keep login route for auto-login flow (redirects to /games automatically)
+    { path: 'login', redirectTo: '/games', pathMatch: 'full' },
+    { path: 'register', redirectTo: '/games', pathMatch: 'full' },
+    { path: 'reset-password', redirectTo: '/games', pathMatch: 'full' },
+
+    // Keep these routes functional but they're hidden from nav
+    { path: 'message', redirectTo: '/games', pathMatch: 'full' },
+    { path: 'message/:userId', component: MessagesComponent },
+    { path: 'ranking', component: RankingComponent },
+    { path: 'profile/:userId', component: ProfileComponent },
+
+    // Default: go straight to games
     { path: '', redirectTo: '/games', pathMatch: 'full' },
+    { path: '**', redirectTo: '/games' },
 ];
 
 @NgModule({

@@ -22,6 +22,8 @@ export class PlayerActionsComponent implements OnChanges {
   public isObserver = false;
   public isPlaying = false;
   public isYourTurn = false;
+  public isSandbox = false;
+  public sandboxPlayerLabel = '';
 
   constructor(
     private alertService: AlertService,
@@ -71,19 +73,44 @@ export class PlayerActionsComponent implements OnChanges {
     this.sessionService.set({ gameStates });
   }
 
+  public switchPlayer() {
+    if (!this.gameState || !this.gameState.sandboxMode) {
+      return;
+    }
+    this.gameService.switchSandboxPlayer(this.gameState.localId);
+  }
+
   ngOnChanges() {
+    this.isSandbox = false;
+    this.sandboxPlayerLabel = '';
+
     if (this.gameState && this.clientId) {
       const state = this.gameState.state;
       const activePlayer = state.players[state.activePlayer];
 
-      this.isYourTurn = activePlayer
-        && activePlayer.id === this.clientId
-        && state.phase === GamePhase.PLAYER_TURN;
+      this.isSandbox = !!this.gameState.sandboxMode;
 
-      this.isPlaying = state.players.some(p => p.id === this.clientId);
-      const waitingForPlayers = state.players.length < 2;
-      const isReplay = !!this.gameState.replay;
-      this.isObserver = isReplay || (!this.isPlaying && !waitingForPlayers);
+      if (this.isSandbox) {
+        const sandboxId = this.gameState.sandboxActivePlayerId;
+        const playerIndex = state.players.findIndex(p => p.id === sandboxId);
+        this.sandboxPlayerLabel = playerIndex === 0 ? 'P1' : 'P2';
+
+        // In sandbox mode, you are always "playing"
+        this.isPlaying = true;
+        this.isObserver = false;
+        this.isYourTurn = activePlayer
+          && activePlayer.id === sandboxId
+          && state.phase === GamePhase.PLAYER_TURN;
+      } else {
+        this.isYourTurn = activePlayer
+          && activePlayer.id === this.clientId
+          && state.phase === GamePhase.PLAYER_TURN;
+
+        this.isPlaying = state.players.some(p => p.id === this.clientId);
+        const waitingForPlayers = state.players.length < 2;
+        const isReplay = !!this.gameState.replay;
+        this.isObserver = isReplay || (!this.isPlaying && !waitingForPlayers);
+      }
     }
   }
 

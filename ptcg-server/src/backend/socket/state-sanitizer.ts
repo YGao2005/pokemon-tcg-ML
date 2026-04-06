@@ -18,12 +18,19 @@ export class StateSanitizer {
 
   /**
    * Clear sensitive data, resolved prompts and old logs.
+   * When sandboxMode is true, skip hiding secret cards and opponent prompts.
    */
-  public sanitize(state: State, gameId: number): State {
+  public sanitize(state: State, gameId: number, sandboxMode: boolean = false): State {
     state = deepClone(state, [ Card ]);
-    state = this.filterPrompts(state);
+    if (sandboxMode) {
+      // In sandbox mode, only filter resolved prompts and remove old logs
+      // but do NOT hide secret cards or opponent prompts
+      state = this.filterResolvedPrompts(state);
+    } else {
+      state = this.filterPrompts(state);
+      state = this.hideSecretCards(state);
+    }
     state = this.removeLogs(state, gameId);
-    state = this.hideSecretCards(state);
     return state;
   }
 
@@ -82,6 +89,16 @@ export class StateSanitizer {
     });
 
     return cardLists;
+  }
+
+  private filterResolvedPrompts(state: State): State {
+    // Only remove resolved prompts; keep all unresolved prompts visible (both players)
+    state.prompts = state.prompts.filter(prompt => {
+      return prompt.result === undefined;
+    });
+    // Cards in the prompt are known, clone to avoid mutation
+    state.prompts = deepClone(state.prompts, [ Card ]);
+    return state;
   }
 
   private filterPrompts(state: State): State {

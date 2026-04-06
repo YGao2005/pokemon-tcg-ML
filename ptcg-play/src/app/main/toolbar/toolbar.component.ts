@@ -47,9 +47,7 @@ export class ToolbarComponent implements OnInit {
   }
 
   public logout() {
-    this.loginRememberService.rememberToken();
-    this.sessionService.clear();
-    this.router.navigate(['/login']);
+    // Local-only mode: no-op (logout button is hidden)
   }
 
   public onLogoClick() {

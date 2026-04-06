@@ -20,16 +20,8 @@ export class CanActivateService implements CanActivate  {
     route: ActivatedRouteSnapshot,
     state: RouterStateSnapshot
   ): Observable<boolean | UrlTree> | Promise<boolean|UrlTree> | boolean| UrlTree {
-    const loggedUserId = this.sessionService.session.loggedUserId;
-    const loggedUser = loggedUserId && this.sessionService.session.users[loggedUserId];
-    const isLoggedIn = !!loggedUser;
-
-    if (isLoggedIn) {
-      return true;
-    }
-
-    this.loginPopupService.redirectUrl = state.url;
-    return this.router.parseUrl('/login');
+    // Local-only mode: always allow navigation, no auth guard
+    return true;
   }
 
 }

@@ -8,4 +8,6 @@ export class GameSettings {
 
   recordingEnabled: boolean = true;
 
+  sandboxMode: boolean = false;
+
 }

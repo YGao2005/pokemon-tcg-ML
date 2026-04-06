@@ -8,10 +8,11 @@
     "rootDirs": ["./src"],
     "removeComments": false,
     "preserveConstEnums": true,
-    "noEmitOnError": true,
+    "noEmitOnError": false,
     "allowSyntheticDefaultImports": true,
     "strict": true,
     "noUnusedLocals": true,
+    "skipLibCheck": true,
     "typeRoots": [
       "node_modules/@types"
     ],

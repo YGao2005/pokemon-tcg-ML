@@ -107,4 +107,10 @@ export class MainService {
       .pipe(finalize(() => { this.loading = false; }));
   }
 
+  public createSandboxGame(deck1: string[], deck2: string[]) {
+    this.loading = true;
+    return this.gameService.createSandboxGame(deck1, deck2)
+      .pipe(finalize(() => { this.loading = false; }));
+  }
+
 }

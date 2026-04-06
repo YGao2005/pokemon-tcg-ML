@@ -14,6 +14,14 @@
   <ptcg-content [loading]="loading || waiting">
     <div class="ptcg-table" *ngIf="gameState">
 
+      <!-- Opponent's hand (visible in sandbox mode) -->
+      <ptcg-hand *ngIf="isSandbox && topPlayer"
+        [clientId]="topPlayer.id"
+        [gameState]="gameState"
+        [player]="topPlayer"
+        class="sandbox-opponent-hand">
+      </ptcg-hand>
+
       <!-- Table board -->
       <ptcg-board
         [clientId]="clientId"

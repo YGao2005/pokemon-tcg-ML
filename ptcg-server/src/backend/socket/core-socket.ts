@@ -1,4 +1,4 @@
-import { GameSettings, StateSerializer } from '../../game';
+import { GameSettings, StateSerializer, AddPlayerAction } from '../../game';
 import { Client } from '../../game/client/client.interface';
 import { Game } from '../../game/core/game';
 import { State } from '../../game/store/state/state';
@@ -26,6 +26,7 @@ export class CoreSocket {
     // core listeners
     this.socket.addListener('core:getInfo', this.getCoreInfo.bind(this));
     this.socket.addListener('core:createGame', this.createGame.bind(this));
+    this.socket.addListener('sandbox:createGame', this.createSandboxGame.bind(this));
   }
 
   public onConnect(client: Client): void {
@@ -100,6 +101,33 @@ export class CoreSocket {
     response('ok', CoreSocket.buildGameState(game));
   }
 
+  private createSandboxGame(
+    params: { deck1: string[], deck2: string[] },
+    response: Response<GameState>
+  ): void {
+    const gameSettings = new GameSettings();
+    gameSettings.sandboxMode = true;
+    gameSettings.recordingEnabled = false;
+    gameSettings.timeLimit = 0; // No time limit in sandbox
+
+    // Create the game with player 1
+    const game = this.core.createGame(this.client, params.deck1, gameSettings);
+
+    // Generate a synthetic client id for player 2 that doesn't collide
+    const sandboxPlayer2Id = this.client.id + 100000;
+    game.sandboxPlayer2Id = sandboxPlayer2Id;
+
+    // Add player 2 using the synthetic id
+    const addPlayer2 = new AddPlayerAction(
+      sandboxPlayer2Id,
+      this.client.name + ' (P2)',
+      params.deck2
+    );
+    game.dispatch(this.client, addPlayer2);
+
+    response('ok', CoreSocket.buildGameState(game));
+  }
+
   public static buildUserInfo(user: User, connected: boolean = true): UserInfo {
     return {
       connected,
@@ -143,7 +171,9 @@ export class CoreSocket {
       clientIds: game.clients.map(client => client.id),
       recordingEnabled: game.gameSettings.recordingEnabled,
       timeLimit: game.gameSettings.timeLimit,
-      playerStats: game.playerStats
+      playerStats: game.playerStats,
+      sandboxMode: game.sandboxMode || undefined,
+      sandboxPlayer2Id: game.sandboxPlayer2Id || undefined
     };
   }
 

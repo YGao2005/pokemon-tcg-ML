@@ -36,7 +36,10 @@ export class SocketService {
 
     this.socket = io(apiUrl, {
       autoConnect: false,
-      reconnection: false,
+      reconnection: true,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
       query: {}
     });
 
@@ -44,12 +47,19 @@ export class SocketService {
     this.socket.on('disconnect', () => this.connectionSubject.next(false));
   }
 
-  public enable(authToken: string) {
+  public enable(authToken?: string) {
+    // If already connected with the same token, skip disconnect/reconnect cycle
+    const currentToken = (this.socket.io.opts.query as any).token;
+    if (this.enabled && this.socket.connected && currentToken === (authToken || '')) {
+      return;
+    }
+
     if (this.enabled) {
       this.socket.disconnect();
     }
 
-    (this.socket.io.opts.query as any).token = authToken;
+    // Local-only mode: connect with or without a token
+    (this.socket.io.opts.query as any).token = authToken || '';
     this.socket.connect();
     this.enabled = true;
   }

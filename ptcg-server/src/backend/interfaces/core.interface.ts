@@ -36,6 +36,8 @@ export interface GameState {
   timeLimit: number;
   recordingEnabled: boolean;
   playerStats: PlayerStats[];
+  sandboxMode?: boolean;
+  sandboxPlayer2Id?: number;
 }
 
 export interface UserInfo {

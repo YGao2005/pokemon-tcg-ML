@@ -59,14 +59,18 @@ export class GameSocket {
 
   public onStateChange(game: Game, state: State): void {
     if (this.core.games.indexOf(game) !== -1) {
-      state = this.stateSanitizer.sanitize(game.state, game.id);
+      try {
+        state = this.stateSanitizer.sanitize(game.state, game.id, game.sandboxMode);
 
-      const serializer = new StateSerializer();
-      const serializedState = serializer.serialize(state);
-      const base64 = new Base64();
-      const stateData = base64.encode(serializedState);
-      const playerStats = game.playerStats;
-      this.socket.emit(`game[${game.id}]:stateChange`, { stateData, playerStats });
+        const serializer = new StateSerializer();
+        const serializedState = serializer.serialize(state);
+        const base64 = new Base64();
+        const stateData = base64.encode(serializedState);
+        const playerStats = game.playerStats;
+        this.socket.emit(`game[${game.id}]:stateChange`, { stateData, playerStats });
+      } catch (error) {
+        console.error(`[game-socket] onStateChange error for game ${game.id}:`, error);
+      }
     }
   }
 
@@ -89,6 +93,14 @@ export class GameSocket {
     }
     delete this.cache.lastLogIdCache[game.id];
     this.core.leaveGame(this.client, game);
+    // For sandbox games, the "keep alive on empty" rule in core.leaveGame
+    // prevents deletion to survive socket reconnects. But an explicit leave
+    // from the UI should always delete the game, otherwise zombie sandbox
+    // games accumulate in core.games and bleed state across tables.
+    if (game.sandboxMode && this.core.games.indexOf(game) !== -1) {
+      console.log(`[game-socket] explicit leave for sandbox game ${game.id}, deleting`);
+      this.core.deleteGame(game);
+    }
     response('ok');
   }
 
@@ -101,6 +113,27 @@ export class GameSocket {
     response('ok', CoreSocket.buildGameState(game));
   }
 
+  /**
+   * Resolve the effective player id for an action.
+   * In sandbox mode, the client can act as either player.
+   */
+  private resolvePlayerId(gameId: number, requestedPlayerId?: number): number {
+    if (requestedPlayerId === undefined) {
+      return this.client.id;
+    }
+
+    const game = this.core.games.find(g => g.id === gameId);
+    if (game && game.sandboxMode) {
+      // Allow the client to act as either player in sandbox mode
+      const isPlayer = game.state.players.some(p => p.id === requestedPlayerId);
+      if (isPlayer) {
+        return requestedPlayerId;
+      }
+    }
+
+    return this.client.id;
+  }
+
   private dispatch(gameId: number, action: Action, response: Response<void>) {
     const game = this.core.games.find(g => g.id === gameId);
     if (game === undefined) {
@@ -108,25 +141,39 @@ export class GameSocket {
       return;
     }
     try {
+      const actionName = action.constructor.name;
+      const phase = game.state.phase;
+      const activePlayer = game.state.players[game.state.activePlayer];
+      console.log(`[dispatch] action=${actionName} phase=${phase} activePlayerId=${activePlayer?.id} clientId=${this.client.id} sandbox=${game.sandboxMode}`);
+      if ('id' in action) console.log(`[dispatch]   action.id=${(action as any).id}`);
+      if ('clientId' in action) console.log(`[dispatch]   action.clientId=${(action as any).clientId}`);
+      if ('handIndex' in action) console.log(`[dispatch]   handIndex=${(action as any).handIndex}`);
       game.dispatch(this.client, action);
+      console.log(`[dispatch] OK`);
     } catch (error) {
+      console.error(`[dispatch] ERROR: ${error.message}`);
+      console.error(`[dispatch] stack: ${error.stack}`);
       response('error', error.message);
+      return;
     }
     response('ok');
   }
 
-  private ability(params: {gameId: number, ability: string, target: CardTarget}, response: Response<void>) {
-    const action = new UseAbilityAction(this.client.id, params.ability, params.target);
+  private ability(params: {gameId: number, ability: string, target: CardTarget, playerId?: number}, response: Response<void>) {
+    const pid = this.resolvePlayerId(params.gameId, params.playerId);
+    const action = new UseAbilityAction(pid, params.ability, params.target);
     this.dispatch(params.gameId, action, response);
   }
 
-  private attack(params: {gameId: number, attack: string}, response: Response<void>) {
-    const action = new AttackAction(this.client.id, params.attack);
+  private attack(params: {gameId: number, attack: string, playerId?: number}, response: Response<void>) {
+    const pid = this.resolvePlayerId(params.gameId, params.playerId);
+    const action = new AttackAction(pid, params.attack);
     this.dispatch(params.gameId, action, response);
   }
 
-  private stadium(params: {gameId: number}, response: Response<void>) {
-    const action = new UseStadiumAction(this.client.id);
+  private stadium(params: {gameId: number, playerId?: number}, response: Response<void>) {
+    const pid = this.resolvePlayerId(params.gameId, params.playerId);
+    const action = new UseStadiumAction(pid);
     this.dispatch(params.gameId, action, response);
   }
 
@@ -135,8 +182,9 @@ export class GameSocket {
     this.dispatch(params.gameId, action, response);
   }
 
-  private playCard(params: {gameId: number, handIndex: number, target: CardTarget}, response: Response<void>) {
-    const action = new PlayCardAction(this.client.id, params.handIndex, params.target);
+  private playCard(params: {gameId: number, handIndex: number, target: CardTarget, playerId?: number}, response: Response<void>) {
+    const pid = this.resolvePlayerId(params.gameId, params.playerId);
+    const action = new PlayCardAction(pid, params.handIndex, params.target);
     this.dispatch(params.gameId, action, response);
   }
 
@@ -167,37 +215,44 @@ export class GameSocket {
     this.dispatch(params.gameId, action, response);
   }
 
-  private reorderBench(params: {gameId: number, from: number, to: number}, response: Response<void>) {
-    const action = new ReorderBenchAction(this.client.id, params.from, params.to);
+  private reorderBench(params: {gameId: number, from: number, to: number, playerId?: number}, response: Response<void>) {
+    const pid = this.resolvePlayerId(params.gameId, params.playerId);
+    const action = new ReorderBenchAction(pid, params.from, params.to);
     this.dispatch(params.gameId, action, response);
   }
 
-  private reorderHand(params: {gameId: number, order: number[]}, response: Response<void>) {
-    const action = new ReorderHandAction(this.client.id, params.order);
+  private reorderHand(params: {gameId: number, order: number[], playerId?: number}, response: Response<void>) {
+    const pid = this.resolvePlayerId(params.gameId, params.playerId);
+    const action = new ReorderHandAction(pid, params.order);
     this.dispatch(params.gameId, action, response);
   }
 
-  private retreat(params: {gameId: number, to: number}, response: Response<void>) {
-    const action = new RetreatAction(this.client.id, params.to);
+  private retreat(params: {gameId: number, to: number, playerId?: number}, response: Response<void>) {
+    const pid = this.resolvePlayerId(params.gameId, params.playerId);
+    const action = new RetreatAction(pid, params.to);
     this.dispatch(params.gameId, action, response);
   }
 
-  private passTurn(params: {gameId: number}, response: Response<void>) {
-    const action = new PassTurnAction(this.client.id);
+  private passTurn(params: {gameId: number, playerId?: number}, response: Response<void>) {
+    const pid = this.resolvePlayerId(params.gameId, params.playerId);
+    const action = new PassTurnAction(pid);
     this.dispatch(params.gameId, action, response);
   }
 
-  private appendLog(params: {gameId: number, message: string}, response: Response<void>) {
+  private appendLog(params: {gameId: number, message: string, playerId?: number}, response: Response<void>) {
+    const pid = this.resolvePlayerId(params.gameId, params.playerId);
     const message = (params.message || '').trim();
     if (message.length === 0 || message.length > 256) {
       response('error', ApiErrorEnum.CANNOT_SEND_MESSAGE);
+      return;
     }
-    const action = new AppendLogAction(this.client.id, GameLog.LOG_TEXT, { text: message });
+    const action = new AppendLogAction(pid, GameLog.LOG_TEXT, { text: message });
     this.dispatch(params.gameId, action, response);
   }
 
-  private changeAvatar(params: {gameId: number, avatarName: string}, response: Response<void>) {
-    const action = new ChangeAvatarAction(this.client.id, params.avatarName);
+  private changeAvatar(params: {gameId: number, avatarName: string, playerId?: number}, response: Response<void>) {
+    const pid = this.resolvePlayerId(params.gameId, params.playerId);
+    const action = new ChangeAvatarAction(pid, params.avatarName);
     this.dispatch(params.gameId, action, response);
   }
 

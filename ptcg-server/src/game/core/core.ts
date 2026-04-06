@@ -114,7 +114,8 @@ export class Core {
       game.handleClientLeave(client);
     }
     // Delete game, if there are no more clients left in the game
-    if (game.clients.length === 0) {
+    // But keep sandbox games alive — the single player may reconnect
+    if (game.clients.length === 0 && !game.sandboxMode) {
       this.deleteGame(game);
     }
   }

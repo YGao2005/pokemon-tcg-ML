@@ -103,6 +103,43 @@ import { LilliesRibombee } from './Lillie\'s Ribombee';
 import { NsCastle } from './N\'s Castle';
 import { Shuppet } from './SV9 Shuppet';
 import { Banette } from './SV9 Banette';
+// Custom cards for Lucardio & Dragapult decks
+import { BosssOrdersMEG } from './MEG Boss\'s Orders';
+import { JudgeDRI } from './DRI Judge';
+import { NightStretcher } from './SFA Night Stretcher';
+import { Carmine } from './TWM Carmine';
+import { LilliesDetermination } from './MEG Lillie\'s Determination';
+import { TeamRocketsPetrel } from './DRI Team Rocket\'s Petrel';
+import { Dawn } from './PFL Dawn';
+import { BuddyBuddyPoffin } from './TEF Buddy-Buddy Poffin';
+import { FightingGong } from './MEG Fighting Gong';
+import { PokePad } from './POR Poke Pad';
+import { AirBalloon } from './ASC Air Balloon';
+import { MaximumBelt } from './TEF Maximum Belt';
+import { PremiumPowerPro } from './MEG Premium Power Pro';
+import { TeamRocketsWatchtower } from './DRI Team Rocket\'s Watchtower';
+import { UnfairStamp } from './TWM Unfair Stamp';
+import { SpecialRedCard } from './JP Special Red Card';
+import { Crispin } from './SCR Crispin';
+import { AreaZeroUnderdepths } from './SCR Area Zero Underdepths';
+import { MakuhitaMEG } from './MEG Makuhita';
+import { RioluMEG } from './MEG Riolu';
+import { MegaLucarioEx } from './MEG Mega Lucario ex';
+import { SolrockMEG } from './MEG Solrock';
+import { LunatoneMEG } from './MEG Lunatone';
+import { HariyamaMEG } from './MEG Hariyama';
+import { MeowthEx } from './POR Meowth ex';
+import { ShayminDRI } from './DRI Shaymin';
+import { DreepyTWM } from './TWM Dreepy';
+import { DrakloakTWM } from './TWM Drakloak';
+import { DragapultEx } from './TWM Dragapult ex';
+import { MunkidoriTWM } from './TWM Munkidori';
+import { DuskullSFA } from './SFA Duskull';
+import { DusclopsSFA } from './SFA Dusclops';
+import { DusknoirPRE } from './PRE Dusknoir';
+import { FezandipitiExSFA } from './SFA Fezandipiti ex';
+import { BudewPRE } from './PRE Budew';
+import { LilliesClefairyEx } from './JTG Lillie\'s Clefairy ex';
 
 export const setScarletAndViolet: Card[] = [
   new ChillTeaserToy(),
@@ -209,4 +246,41 @@ export const setScarletAndViolet: Card[] = [
   new NsCastle(),
   new Shuppet(),
   new Banette(),
+  // Lucardio & Dragapult deck cards
+  new BosssOrdersMEG(),
+  new JudgeDRI(),
+  new NightStretcher(),
+  new Carmine(),
+  new LilliesDetermination(),
+  new TeamRocketsPetrel(),
+  new Dawn(),
+  new BuddyBuddyPoffin(),
+  new FightingGong(),
+  new PokePad(),
+  new AirBalloon(),
+  new MaximumBelt(),
+  new PremiumPowerPro(),
+  new TeamRocketsWatchtower(),
+  new UnfairStamp(),
+  new SpecialRedCard(),
+  new Crispin(),
+  new AreaZeroUnderdepths(),
+  new MakuhitaMEG(),
+  new RioluMEG(),
+  new MegaLucarioEx(),
+  new SolrockMEG(),
+  new LunatoneMEG(),
+  new HariyamaMEG(),
+  new MeowthEx(),
+  new ShayminDRI(),
+  new DreepyTWM(),
+  new DrakloakTWM(),
+  new DragapultEx(),
+  new MunkidoriTWM(),
+  new DuskullSFA(),
+  new DusclopsSFA(),
+  new DusknoirPRE(),
+  new FezandipitiExSFA(),
+  new BudewPRE(),
+  new LilliesClefairyEx(),
 ];

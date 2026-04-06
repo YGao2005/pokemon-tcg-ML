@@ -25,6 +25,9 @@ export interface LocalGameState extends GameState {
   logs: StateLog[];
   replayPosition: number;
   replay?: Replay;
+  sandboxMode?: boolean;
+  sandboxPlayer2Id?: number;
+  sandboxActivePlayerId?: number;
 }
 
 export interface UserInfoMap {

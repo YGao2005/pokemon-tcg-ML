@@ -5,6 +5,7 @@ import { MatchTableComponent } from './match-table/match-table.component';
 import { SharedModule } from '../shared/shared.module';
 import { GameActionsComponent } from './game-actions/game-actions.component';
 import { CreateGamePopupComponent } from './create-game-popup/create-game-popup.component';
+import { SandboxPopupComponent } from './sandbox-popup/sandbox-popup.component';
 import { GamesTableComponent } from './games-table/games-table.component';
 
 @NgModule({
@@ -13,10 +14,12 @@ import { GamesTableComponent } from './games-table/games-table.component';
     GameActionsComponent,
     MatchTableComponent,
     CreateGamePopupComponent,
+    SandboxPopupComponent,
     GamesTableComponent
   ],
   entryComponents: [
-    CreateGamePopupComponent
+    CreateGamePopupComponent,
+    SandboxPopupComponent
   ],
   imports: [
     SharedModule

@@ -37,25 +37,65 @@ export class LoginComponent implements OnInit, OnDestroy {
       this.socketService.setServerUrl(apiUrl);
     }
 
+    // Try token login first, then auto-login as default user
     const token = this.loginRememberService.token;
-    if (!token) {
-      this.loginPopupService.openDialog();
-      return;
+    if (token) {
+      this.loading = true;
+      this.loginService.tokenLogin(token, this.loginAborted$).pipe(
+        untilDestroyed(this),
+        finalize(() => { this.loading = false; })
+      ).subscribe({
+        next: response => {
+          this.loginRememberService.rememberToken(response.token);
+          this.router.navigate([this.loginPopupService.redirectUrl]);
+        },
+        error: () => {
+          this.loginRememberService.rememberToken();
+          this.autoLogin();
+        }
+      });
+    } else {
+      this.autoLogin();
     }
+  }
 
+  private autoLogin() {
     this.loading = true;
-    this.loginService.tokenLogin(token, this.loginAborted$).pipe(
+    const name = 'player';
+    const password = 'player';
+
+    // Try login first, register if it fails
+    this.loginService.login(name, password, this.loginAborted$).pipe(
       untilDestroyed(this),
       finalize(() => { this.loading = false; })
     ).subscribe({
       next: response => {
         this.loginRememberService.rememberToken(response.token);
-        const redirectUrl = this.loginPopupService.redirectUrl;
-        this.router.navigate([redirectUrl]);
+        this.router.navigate([this.loginPopupService.redirectUrl]);
       },
       error: () => {
-        this.loginRememberService.rememberToken();
-        this.loginPopupService.openDialog();
+        // Registration then login
+        this.loginService.register(name, password, '').pipe(
+          untilDestroyed(this),
+        ).subscribe({
+          next: () => {
+            this.loginService.login(name, password, this.loginAborted$).pipe(
+              untilDestroyed(this),
+              finalize(() => { this.loading = false; })
+            ).subscribe({
+              next: response => {
+                this.loginRememberService.rememberToken(response.token);
+                this.router.navigate([this.loginPopupService.redirectUrl]);
+              },
+              error: () => {
+                this.loginPopupService.openDialog();
+              }
+            });
+          },
+          error: () => {
+            this.loginPopupService.openDialog();
+          }
+        });
       }
     });
   }

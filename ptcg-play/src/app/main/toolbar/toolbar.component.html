@@ -1,28 +1,14 @@
-<mat-toolbar color="primary" [ngClass]="{'is-logged-in': loggedUser}">
+<mat-toolbar color="primary" class="is-logged-in">
   <button mat-button (click)="onLogoClick()">{{ 'MAIN_TITLE' | translate }}</button>
   <span class="ryuu-spacer"></span>
 
-  <!-- Language select -->
-  <ptcg-language-select *ngIf="!loggedUser"></ptcg-language-select>
-
+  <!-- Local-only mode: show user bar without profile/logout menu -->
   <div class="ptcg-toolbar-user-info">
-    <button *ngIf="!loggedUser" mat-button (click)="login()">
-      {{ 'BUTTON_LOGIN' | translate }}
-    </button>
     <ptcg-user-bar *ngIf="loggedUser"
       class="ptcg-logged-user"
       [openUserPopup]="false"
-      [user]="loggedUser"
-      [matMenuTriggerFor]="menu">
+      [user]="loggedUser">
     </ptcg-user-bar>
-    <mat-menu #menu="matMenu">
-      <button mat-menu-item [routerLink]="['/profile', loggedUser?.userId]">
-        {{ 'BUTTON_SHOW_PROFILE' | translate }}
-      </button>
-      <button mat-menu-item (click)="logout()">
-        {{ 'BUTTON_LOGOUT' | translate }}
-      </button>
-    </mat-menu>
   </div>
 
 </mat-toolbar>

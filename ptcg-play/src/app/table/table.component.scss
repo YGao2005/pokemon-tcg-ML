@@ -16,3 +16,8 @@ ptcg-board {
 ptcg-hand {
   flex: 0 0 auto;
 }
+
+ptcg-hand.sandbox-opponent-hand {
+  opacity: 0.85;
+  border-bottom: 2px solid rgba(255, 152, 0, 0.5);
+}

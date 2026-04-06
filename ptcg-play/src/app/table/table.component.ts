@@ -29,6 +29,7 @@ export class TableComponent implements OnInit {
   public clientId: number;
   public loading: boolean;
   public waiting: boolean;
+  public isSandbox: boolean = false;
   private gameId: number;
 
   constructor(
@@ -112,6 +113,7 @@ export class TableComponent implements OnInit {
     this.bottomPlayer = undefined;
     this.topPlayer = undefined;
     this.waiting = false;
+    this.isSandbox = false;
     this.clientId = clientId;
 
     if (!gameState || !gameState.state) {
@@ -120,6 +122,14 @@ export class TableComponent implements OnInit {
     }
 
     const state = gameState.state;
+
+    // Sandbox mode: use sandboxActivePlayerId as the effective clientId
+    if (gameState.sandboxMode && gameState.sandboxActivePlayerId !== undefined) {
+      this.isSandbox = true;
+      this.clientId = gameState.sandboxActivePlayerId;
+      clientId = gameState.sandboxActivePlayerId;
+    }
+
     if (state.players.length >= 1) {
       if (state.players[0].id === clientId) {
         this.bottomPlayer = state.players[0];
@@ -154,7 +164,13 @@ export class TableComponent implements OnInit {
       const waitingForMe = prompts.some(p => p.playerId === clientId);
       const notMyTurn = state.players[state.activePlayer].id !== clientId
         && state.phase === GamePhase.PLAYER_TURN;
-      this.waiting = (notMyTurn || waitingForOthers) && !waitingForMe && !isObserver;
+
+      // In sandbox mode, never show the waiting spinner
+      if (this.isSandbox) {
+        this.waiting = false;
+      } else {
+        this.waiting = (notMyTurn || waitingForOthers) && !waitingForMe && !isObserver;
+      }
     }
   }
 

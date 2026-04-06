@@ -37,6 +37,13 @@
 
         <span class="ptcg-u-spacer"></span>
 
+        <button mat-raised-button color="warn"
+          [disabled]="loading"
+          (click)="createSandbox()"
+          class="sandbox-button">
+          Sandbox
+        </button>
+
         <button mat-raised-button color="primary"
           [disabled]="loading"
           (click)="createGame()">
