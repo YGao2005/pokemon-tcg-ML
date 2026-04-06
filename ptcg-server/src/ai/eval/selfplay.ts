@@ -68,6 +68,8 @@ export interface SelfPlayStats {
   maxTurns: number;
   /** Total wall time for the run, in milliseconds. */
   wallTimeMs: number;
+  /** Total Env.step() calls across all games (legal + illegal + crash). */
+  totalSteps: number;
   /** Per-card play count, keyed by `card.fullName`. Records every successful
    *  PlayCardAction dispatch (NOT including failed attempts). */
   cardPlayCounts: Record<string, number>;
@@ -133,6 +135,7 @@ export function runSelfPlay(options: SelfPlayOptions): SelfPlayStats {
     avgTurns: 0,
     maxTurns: 0,
     wallTimeMs: 0,
+    totalSteps: 0,
     cardPlayCounts: {},
     crashDetails: [],
   };
@@ -236,6 +239,7 @@ export function runSelfPlay(options: SelfPlayOptions): SelfPlayStats {
       }
 
       const result = env.step(envState, action);
+      stats.totalSteps++;
 
       if (result.info.crashed) {
         stats.crashes++;

@@ -266,8 +266,14 @@ export class Env {
   }
 
   /**
-   * Enumerate plausibly legal actions. Over-enumeration is OK because step()
-   * gracefully handles illegal actions (returns unchanged state with error).
+   * Returns the over-enumerated candidate action set without precondition filtering.
+   * Use this when you need ground truth (tests, MCTS tree expansion correctness checks,
+   * debugging). For performance-sensitive callers (RandomBot, self-play harness),
+   * prefer legalActions().
+   *
+   * Invariant: every action returned by legalActions() is also in legalActionsRaw().
+   * Inverse is NOT guaranteed — legalActions() may filter out candidates that
+   * legalActionsRaw() includes (when validateAction's pre-checks reject them).
    *
    * Phase 1 returns a coarse set:
    *   - PassTurnAction (always)
@@ -282,7 +288,7 @@ export class Env {
    * The bot/encoder layer in plan 01-02+ will refine this to a true legal
    * action set with proper target enumeration.
    */
-  public legalActions(envState: EnvState): Action[] {
+  public legalActionsRaw(envState: EnvState): Action[] {
     const state = envState.state;
     const actions: Action[] = [];
 
@@ -352,6 +358,34 @@ export class Env {
     }
 
     return actions;
+  }
+
+  /**
+   * Enumerate the filtered legal action set used by performance-sensitive callers.
+   *
+   * Calls `legalActionsRaw` to get the over-enumerated candidate set, then filters
+   * out actions that fail cheap pre-dispatch validation in `validateAction`. This is
+   * the same logic `Env.step` uses to short-circuit illegal actions before paying
+   * for `Store.dispatch`'s deepClone, so applying it at enumeration time too means
+   * RandomBot picks fewer illegal candidates.
+   *
+   * The filter preserves the order of `legalActionsRaw` so the seeded reproducibility
+   * contract holds: same seed → same filtered candidates (in the same order) → same
+   * `nextInt(actions.length)` picks. **Note:** the hash sequence emitted by the
+   * pre-filter version of `Env.legalActions` will differ from the post-filter version
+   * because filtering changes which index nextInt selects. That's expected — what
+   * matters is that two runs of THIS code with the same seed produce identical hash
+   * sequences (the differential reproducibility invariant).
+   *
+   * Safety net: if the filtered set is ever empty (which would be a bug — at minimum
+   * PassTurnAction is always pre-dispatch valid during a player's turn), fall back to
+   * the raw set so RandomBot doesn't crash.
+   *
+   * Task 1 of plan 01-04: this method initially just calls legalActionsRaw with no
+   * filtering — Task 3 will add the filter via validateAction.
+   */
+  public legalActions(envState: EnvState): Action[] {
+    return this.legalActionsRaw(envState);
   }
 
   /**

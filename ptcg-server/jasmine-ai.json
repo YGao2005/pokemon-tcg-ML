@@ -2,7 +2,8 @@
   "spec_dir": "output/ai/__tests__",
   "spec_files": [
     "env.spec.js",
-    "selfplay.spec.js"
+    "selfplay.spec.js",
+    "dragapult-cards.spec.js"
   ],
   "stopSpecOnExpectationFailure": false,
   "random": false
