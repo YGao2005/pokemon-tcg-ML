@@ -34,7 +34,14 @@ function* playCard(next: Function, store: StoreLike, state: State, effect: Train
     return state;
   }
 
-  player.hand.moveCardTo(effect.trainerCard, player.discard);
+  // Move to supporter zone, NOT discard. End-of-turn cleanup
+  // (game-phase-effect.ts) moves supporter → discard, so the final resting
+  // place is the same. The mid-turn placement matters for the one-Supporter-
+  // per-turn rule: play-card-reducer.ts line 90 checks
+  // `player.supporter.cards.length > 0` to reject subsequent supporters, and
+  // moving straight to discard bypassed this check (multi-Boss's-Orders
+  // loophole). Fix discovered by Plan 01-06 L6 cross-card interaction tests.
+  player.hand.moveCardTo(effect.trainerCard, player.supporter);
   opponent.switchPokemon(targets[0]);
   return state;
 }
