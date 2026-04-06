@@ -4,6 +4,9 @@ import { StoreLike, State, StateUtils, PowerType, PlayerType, SlotType, PokemonC
 import { Effect } from '../../game/store/effects/effect';
 import { AttackEffect, PowerEffect } from '../../game/store/effects/game-effects';
 import { PutDamagePrompt } from '../../game/store/prompts/put-damage-prompt';
+import { PutCountersEffect } from '../../game/store/effects/attack-effects';
+import { CheckHpEffect } from '../../game/store/effects/check-effects';
+import { DamageMap } from '../../game/store/prompts/move-damage-prompt';
 
 export class FezandipitiExSFA extends PokemonCard {
   public tags = [CardTag.POKEMON_ex];
@@ -39,9 +42,21 @@ export class FezandipitiExSFA extends PokemonCard {
       player.deck.moveTo(player.hand, Math.min(3, player.deck.cards.length));
     }
 
-    // Cruel Arrow - 100 damage to any one Pokemon
+    // Cruel Arrow - 100 damage to one of opponent's Pokemon (any).
+    // Fixed in Plan 01-05: same root cause as Phantom Dive — constructor
+    // signature mismatch and callback dereference bug. Now resolves the
+    // CardTarget via StateUtils.getTarget and dispatches PutCountersEffect
+    // through the engine pipeline.
     if (effect instanceof AttackEffect && effect.attack === this.attacks[0]) {
       const player = effect.player;
+      const opponent = StateUtils.getOpponent(state, player);
+
+      const maxAllowedDamage: DamageMap[] = [];
+      opponent.forEachPokemon(PlayerType.TOP_PLAYER, (cardList, card, target) => {
+        const checkHpEffect = new CheckHpEffect(opponent, cardList);
+        store.reduceEffect(state, checkHpEffect);
+        maxAllowedDamage.push({ target, damage: checkHpEffect.hp });
+      });
 
       return store.prompt(state, new PutDamagePrompt(
         player.id,
@@ -49,12 +64,15 @@ export class FezandipitiExSFA extends PokemonCard {
         PlayerType.TOP_PLAYER,
         [SlotType.ACTIVE, SlotType.BENCH],
         100,
+        maxAllowedDamage,
         { allowCancel: false, min: 1, max: 1 }
       ), targets => {
-        if (targets) {
-          targets.forEach((target: { target: PokemonCardList, damage: number }) => {
-            target.target.damage += target.damage;
-          });
+        const results = targets || [];
+        for (const result of results) {
+          const target = StateUtils.getTarget(state, player, result.target);
+          const putCountersEffect = new PutCountersEffect(effect, result.damage);
+          putCountersEffect.target = target;
+          store.reduceEffect(state, putCountersEffect);
         }
       });
     }
