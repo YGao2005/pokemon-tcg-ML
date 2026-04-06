@@ -60,11 +60,14 @@ import { ConfirmPrompt } from '../game/store/prompts/confirm-prompt';
 import { ShowCardsPrompt } from '../game/store/prompts/show-cards-prompt';
 import { SelectPrompt } from '../game/store/prompts/select-prompt';
 import { OrderCardsPrompt } from '../game/store/prompts/order-cards-prompt';
+import { PutDamagePrompt } from '../game/store/prompts/put-damage-prompt';
+import { MoveDamagePrompt, DamageTransfer } from '../game/store/prompts/move-damage-prompt';
+import { ChooseEnergyPrompt, EnergyMap } from '../game/store/prompts/choose-energy-prompt';
 import { Card } from '../game/store/card/card';
 import { EnergyCard } from '../game/store/card/energy-card';
 import { PokemonCard } from '../game/store/card/pokemon-card';
 import { TrainerCard } from '../game/store/card/trainer-card';
-import { Stage, TrainerType, SpecialCondition } from '../game/store/card/card-types';
+import { Stage, TrainerType, SpecialCondition, CardType } from '../game/store/card/card-types';
 import { Player } from '../game/store/state/player';
 import { PokemonCardList } from '../game/store/state/pokemon-card-list';
 import { deepClone } from '../utils/utils';
@@ -1094,7 +1097,183 @@ export class Env {
       return new ResolvePromptAction(prompt.id, indices);
     }
 
-    // 10. Unknown prompt — log once, fall back to a generic resolution.
+    // 10. PutDamagePrompt — distribute the requested damage in 10-counter
+    //     chunks across legal targets. Used by Dragapult ex Phantom Dive,
+    //     Dusknoir/Dusclops Cursed Blast, Fezandipiti ex Cruel Arrow, and
+    //     similar "spread/place damage counters" effects.
+    //
+    //     Strategy: greedy round-robin distribution. Place a 10-damage chunk
+    //     on each legal target in turn, wrapping around until prompt.damage
+    //     is fully allocated. For Phantom Dive (damage=60) over 1-5 bench
+    //     targets, this matches the human "spread evenly" intuition.
+    //
+    //     Mirrors the implementation in card-test-harness.ts so unit tests
+    //     and self-play behave identically. Plan 01-05 ports this from the
+    //     test harness into env.ts to fix the silent-drop semantic bugs
+    //     catalogued in KNOWN_CARD_BUGS.md.
+    if (prompt instanceof PutDamagePrompt) {
+      const player = state.players.find(p => p.id === prompt.playerId);
+      const opp = state.players.find(p => p.id !== prompt.playerId);
+      if (player === undefined || opp === undefined) {
+        if (prompt.options.allowCancel) return new ResolvePromptAction(prompt.id, null);
+        return new ResolvePromptAction(prompt.id, []);
+      }
+      const targetsList: { target: CardTarget; pcl: PokemonCardList }[] = [];
+      const collect = (p: Player, who: PlayerType) => {
+        if (prompt.slots.includes(SlotType.ACTIVE) && p.active.cards.length > 0) {
+          targetsList.push({ target: { player: who, slot: SlotType.ACTIVE, index: 0 }, pcl: p.active });
+        }
+        if (prompt.slots.includes(SlotType.BENCH)) {
+          for (let i = 0; i < p.bench.length; i++) {
+            if (p.bench[i].cards.length > 0) {
+              targetsList.push({ target: { player: who, slot: SlotType.BENCH, index: i }, pcl: p.bench[i] });
+            }
+          }
+        }
+      };
+      if (prompt.playerType === PlayerType.BOTTOM_PLAYER || prompt.playerType === PlayerType.ANY) {
+        collect(player, PlayerType.BOTTOM_PLAYER);
+      }
+      if (prompt.playerType === PlayerType.TOP_PLAYER || prompt.playerType === PlayerType.ANY) {
+        collect(opp, PlayerType.TOP_PLAYER);
+      }
+      if (targetsList.length === 0) {
+        if (prompt.options.allowCancel) return new ResolvePromptAction(prompt.id, null);
+        return new ResolvePromptAction(prompt.id, []);
+      }
+      // Distribute prompt.damage across targets in 10-damage chunks. Greedy
+      // round-robin: place each chunk on the next target, wrapping around.
+      const result: { target: CardTarget; damage: number }[] = [];
+      let remaining = prompt.damage;
+      let i = 0;
+      while (remaining > 0) {
+        const tgt = targetsList[i % targetsList.length];
+        const existing = result.find(r => r.target === tgt.target);
+        const chunk = Math.min(10, remaining);
+        if (existing) {
+          existing.damage += chunk;
+        } else {
+          result.push({ target: tgt.target, damage: chunk });
+        }
+        remaining -= chunk;
+        i++;
+        if (i > 1000) break;  // safety
+      }
+      return new ResolvePromptAction(prompt.id, result);
+    }
+
+    // 11. MoveDamagePrompt — pick a legal source/destination pair and move
+    //     up to maxAllowedDamage worth of damage counters. Used by Dusknoir
+    //     BW2 Sinister Hand, Munkidori TWM Adrena-Brain, Tapu Lele Magical
+    //     Swap, Banette-GX Shady Move, etc.
+    //
+    //     Strategy: scan targetsList for the first slot with damage > 0
+    //     (source) and the first DIFFERENT slot (destination). If we find
+    //     such a pair, return a single 10-damage transfer. If no source has
+    //     damage, cancel (allowCancel=true) or return [] (otherwise).
+    //
+    //     This is intentionally minimal — Phase 1's job is "no silent
+    //     abort, the engine actually moves a counter". Plan 01-05's L4/L5
+    //     scenario tests verify the assertion that MoveDamagePrompt actually
+    //     mutates state. A smarter strategy (move multiple counters, pick
+    //     the most damaged source) is L7/L8 territory.
+    if (prompt instanceof MoveDamagePrompt) {
+      const player = state.players.find(p => p.id === prompt.playerId);
+      const opp = state.players.find(p => p.id !== prompt.playerId);
+      if (player === undefined || opp === undefined) {
+        if (prompt.options.allowCancel) return new ResolvePromptAction(prompt.id, null);
+        return new ResolvePromptAction(prompt.id, []);
+      }
+      const targetsList: { target: CardTarget; pcl: PokemonCardList }[] = [];
+      const collect = (p: Player, who: PlayerType) => {
+        if (prompt.slots.includes(SlotType.ACTIVE) && p.active.cards.length > 0) {
+          targetsList.push({ target: { player: who, slot: SlotType.ACTIVE, index: 0 }, pcl: p.active });
+        }
+        if (prompt.slots.includes(SlotType.BENCH)) {
+          for (let i = 0; i < p.bench.length; i++) {
+            if (p.bench[i].cards.length > 0) {
+              targetsList.push({ target: { player: who, slot: SlotType.BENCH, index: i }, pcl: p.bench[i] });
+            }
+          }
+        }
+      };
+      if (prompt.playerType === PlayerType.BOTTOM_PLAYER || prompt.playerType === PlayerType.ANY) {
+        collect(player, PlayerType.BOTTOM_PLAYER);
+      }
+      if (prompt.playerType === PlayerType.TOP_PLAYER || prompt.playerType === PlayerType.ANY) {
+        collect(opp, PlayerType.TOP_PLAYER);
+      }
+      // Find first damaged source.
+      const sourceIdx = targetsList.findIndex(t => t.pcl.damage >= 10);
+      if (sourceIdx === -1) {
+        // No damage to move. Cancel if allowed; otherwise return empty.
+        if (prompt.options.allowCancel) return new ResolvePromptAction(prompt.id, null);
+        return new ResolvePromptAction(prompt.id, []);
+      }
+      // Find first different slot for destination.
+      const destIdx = targetsList.findIndex((t, idx) => idx !== sourceIdx);
+      if (destIdx === -1) {
+        // Only one Pokemon — nowhere to move damage to.
+        if (prompt.options.allowCancel) return new ResolvePromptAction(prompt.id, null);
+        return new ResolvePromptAction(prompt.id, []);
+      }
+      // Single transfer (1 damage counter). The prompt's validate method
+      // checks both endpoints belong to the right player(s) and slot types,
+      // and that result.length is in [min, max]. options.min defaults to 0
+      // and options.max defaults to undefined (no upper bound), so a
+      // single-transfer result satisfies the bounds for every card we know.
+      const transfer: DamageTransfer = {
+        from: targetsList[sourceIdx].target,
+        to: targetsList[destIdx].target,
+      };
+      return new ResolvePromptAction(prompt.id, [transfer]);
+    }
+
+    // 12. ChooseEnergyPrompt — pick an EnergyMap[] subset that pays
+    //     `prompt.cost`. Used by Crispin SCR (energy from deck), Night
+    //     Stretcher SFA (recover energy from discard), and similar tutor
+    //     effects. The validate method requires `StateUtils.checkExactEnergy`
+    //     to match — i.e. the sum of provides[] must equal cost[] including
+    //     colorless slots.
+    //
+    //     Strategy: greedy match. For each non-colorless cost type, find an
+    //     energy that provides it; remove it from the pool. Then fill any
+    //     remaining colorless cost slots with whatever's left in the pool.
+    //     If we can't satisfy all costs, return null (cancel) if allowed,
+    //     otherwise return an empty array (the engine will reject — that's
+    //     fine, the auto-resolver doesn't promise optimal play).
+    if (prompt instanceof ChooseEnergyPrompt) {
+      const pool: EnergyMap[] = prompt.energy.slice();
+      const picked: EnergyMap[] = [];
+      const cost = prompt.cost.slice();
+      // Step 1: pay concrete (non-colorless) costs.
+      for (let i = cost.length - 1; i >= 0; i--) {
+        const c = cost[i];
+        if (c === CardType.COLORLESS) continue;
+        const idx = pool.findIndex(e => e.provides.includes(c));
+        if (idx === -1) continue;  // can't satisfy this cost, try next
+        picked.push(pool[idx]);
+        pool.splice(idx, 1);
+        cost.splice(i, 1);
+      }
+      // Step 2: fill colorless slots with anything left in the pool.
+      const colorlessNeeded = cost.filter(c => c === CardType.COLORLESS).length;
+      for (let i = 0; i < colorlessNeeded && pool.length > 0; i++) {
+        picked.push(pool[0]);
+        pool.splice(0, 1);
+      }
+      // If we couldn't satisfy and the prompt allows cancellation, do so.
+      // Otherwise return what we have — the engine validates and will reject
+      // if checkExactEnergy fails.
+      if (picked.length === 0 && prompt.options.allowCancel) {
+        return new ResolvePromptAction(prompt.id, null);
+      }
+      // ChooseEnergyPrompt.decode expects number[] (indices into prompt.energy).
+      const indices = picked.map(e => prompt.energy.indexOf(e)).filter(i => i >= 0);
+      return new ResolvePromptAction(prompt.id, indices);
+    }
+
+    // 13. Unknown prompt — log once, fall back to a generic resolution.
     const typeName = prompt.constructor.name;
     if (!observedUnknownPromptTypes.has(typeName)) {
       observedUnknownPromptTypes.add(typeName);
