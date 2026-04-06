@@ -84,20 +84,35 @@ export class Store implements StoreLike {
   }
 
   public reduceEffect(state: State, effect: Effect): State {
-    state = this.propagateEffect(state, effect);
+    const effectName = effect.constructor.name;
+    if (process.env.DEBUG) { console.log(`[store.reduceEffect] effect=${effectName}`); }
+    try {
+      state = this.propagateEffect(state, effect);
+    } catch (err) {
+      // Error log stays unconditional — genuine crash diagnosis.
+      console.error(`[store.reduceEffect] propagateEffect ERROR for ${effectName}: ${err.message}`);
+      throw err;
+    }
 
     if (effect.preventDefault === true) {
+      if (process.env.DEBUG) { console.log(`[store.reduceEffect] ${effectName} was prevented`); }
       return state;
     }
 
-    state = gamePhaseReducer(this, state, effect);
-    state = playEnergyReducer(this, state, effect);
-    state = playPokemonReducer(this, state, effect);
-    state = playTrainerReducer(this, state, effect);
-    state = retreatReducer(this, state, effect);
-    state = gameReducer(this, state, effect);
-    state = attackReducer(this, state, effect);
-    state = checkStateReducer(this, state, effect);
+    try {
+      state = gamePhaseReducer(this, state, effect);
+      state = playEnergyReducer(this, state, effect);
+      state = playPokemonReducer(this, state, effect);
+      state = playTrainerReducer(this, state, effect);
+      state = retreatReducer(this, state, effect);
+      state = gameReducer(this, state, effect);
+      state = attackReducer(this, state, effect);
+      state = checkStateReducer(this, state, effect);
+    } catch (err) {
+      // Error log stays unconditional — genuine crash diagnosis.
+      console.error(`[store.reduceEffect] reducer ERROR for ${effectName}: ${err.message}`);
+      throw err;
+    }
 
     return state;
   }
@@ -192,6 +207,10 @@ export class Store implements StoreLike {
     this.promptItems.length = 0;
 
     try {
+      if (process.env.DEBUG) {
+        console.log(`[store.reduce] phase=${state.phase} turn=${state.turn} activePlayer=${state.activePlayer} players=[${state.players.map(p => p.id).join(',')}]`);
+        console.log(`[store.reduce] pendingPrompts=${state.prompts.filter(p => p.result === undefined).length} hand0=${state.players[0]?.hand.cards.length} hand1=${state.players[1]?.hand.cards.length}`);
+      }
       state = setupPhaseReducer(this, state, action);
       state = playCardReducer(this, state, action);
       state = playerTurnReducer(this, state, action);
@@ -201,7 +220,8 @@ export class Store implements StoreLike {
         state = checkState(this, state);
       }
     } catch (storeError) {
-      // Illegal action
+      // Illegal action — error log stays unconditional (genuine crash diagnosis).
+      console.error(`[store.reduce] ERROR in reduce: ${storeError.message}`);
       this.state = stateBackup;
       this.promptItems.length = 0;
       throw storeError;
@@ -228,7 +248,16 @@ export class Store implements StoreLike {
       player.discard.cards.forEach(c => cards.push(c));
     }
     cards.sort(c => c.superType);
-    cards.forEach(c => { state = c.reduceEffect(this, state, effect); });
+    const effectName = effect.constructor.name;
+    cards.forEach(c => {
+      try {
+        state = c.reduceEffect(this, state, effect);
+      } catch (err) {
+        console.error(`[propagateEffect] Card "${c.fullName}" threw on ${effectName}: ${err.message}`);
+        console.error(`[propagateEffect] stack: ${err.stack}`);
+        throw err;
+      }
+    });
     return state;
   }
 }

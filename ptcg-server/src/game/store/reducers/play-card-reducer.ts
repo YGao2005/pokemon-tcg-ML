@@ -34,13 +34,24 @@ export function playCardReducer(store: StoreLike, state: State, action: Action):
   if (state.phase === GamePhase.PLAYER_TURN) {
 
     if (action instanceof PlayCardAction) {
+      if (process.env.DEBUG) {
+        console.log(`[playCardReducer] action.id=${action.id} player.id=${player?.id} handIndex=${action.handIndex} target=${JSON.stringify(action.target)}`);
+        console.log(`[playCardReducer] handSize=${player?.hand.cards.length} cards=[${player?.hand.cards.map((c: any) => c.name).join(', ')}]`);
+      }
       if (player === undefined || player.id !== action.id) {
+        // Error log stays unconditional — genuine crash diagnosis.
+        console.error(`[playCardReducer] NOT_YOUR_TURN: player.id=${player?.id} action.id=${action.id}`);
         throw new GameError(GameMessage.NOT_YOUR_TURN);
       }
 
       const handCard = player.hand.cards[action.handIndex];
+      if (process.env.DEBUG) {
+        console.log(`[playCardReducer] card=${handCard?.name} type=${handCard?.constructor.name} superType=${handCard?.superType}`);
+      }
 
       if (handCard === undefined) {
+        // Error log stays unconditional — genuine crash diagnosis.
+        console.error(`[playCardReducer] UNKNOWN_CARD: handIndex=${action.handIndex} handSize=${player.hand.cards.length}`);
         throw new GameError(GameMessage.UNKNOWN_CARD);
       }
 
