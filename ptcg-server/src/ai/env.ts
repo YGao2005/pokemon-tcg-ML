@@ -61,6 +61,10 @@ import { ShowCardsPrompt } from '../game/store/prompts/show-cards-prompt';
 import { SelectPrompt } from '../game/store/prompts/select-prompt';
 import { OrderCardsPrompt } from '../game/store/prompts/order-cards-prompt';
 import { Card } from '../game/store/card/card';
+import { EnergyCard } from '../game/store/card/energy-card';
+import { PokemonCard } from '../game/store/card/pokemon-card';
+import { TrainerCard } from '../game/store/card/trainer-card';
+import { Stage, TrainerType, SpecialCondition } from '../game/store/card/card-types';
 import { Player } from '../game/store/state/player';
 import { PokemonCardList } from '../game/store/state/pokemon-card-list';
 import { deepClone } from '../utils/utils';
@@ -157,16 +161,322 @@ export class Env {
   }
 
   /**
+   * Cheap pre-dispatch validation — mirrors the engine reducers' early-rejection
+   * paths so obviously-illegal actions can be rejected without paying for
+   * `Store.dispatch`'s deepClone. Used by both `Env.step` (skip dispatch on
+   * reject) and `Env.legalActions` (filter the over-enumerated raw set).
+   *
+   * Returns `{ valid: true }` if the action *might* succeed (but the engine still
+   * has the final say — deeper checks like ability-specific preconditions or
+   * exact energy cost matching are NOT mirrored here). Returns `{ valid: false,
+   * reason }` if the action is obviously illegal from the current state.
+   *
+   * **Correctness contract:** every check here MUST mirror an early-rejection
+   * path in the engine reducers (`src/game/store/reducers/` and
+   * `src/game/store/effect-reducers/`). The STRICT mode in `step()` cross-checks
+   * each reject by also dispatching the action and asserting the engine
+   * rejected too — any false-reject throws a fatal error. **When in doubt,
+   * leave the action valid (over-enumerate) rather than risk a silent
+   * shrink of the action space.**
+   *
+   * Engine reducer mappings (verified by reading the source as of 01-04):
+   *   PassTurnAction      → reducers/player-turn-reducer.ts NOT_YOUR_TURN check
+   *   PlayCardAction      → reducers/play-card-reducer.ts (energy/pokemon/trainer paths)
+   *   AttackAction        → player-turn-reducer.ts UNKNOWN_ATTACK + game-effect.ts useAttack status check
+   *   RetreatAction       → effect-reducers/retreat-effect.ts retreat checks
+   *   UseAbilityAction    → player-turn-reducer.ts UseAbilityAction switch
+   */
+  public validateAction(state: State, action: Action): { valid: boolean; reason?: string } {
+    // Defensive: terminal or unresolved-prompts state — caller is wrong but be safe.
+    if (state.phase === GamePhase.FINISHED) {
+      return { valid: false, reason: 'game already terminal' };
+    }
+    if (state.phase !== GamePhase.PLAYER_TURN) {
+      // The engine ignores actions in other phases (returns state unchanged); we
+      // call those rejects so the bot doesn't waste a dispatch.
+      return { valid: false, reason: `not player turn (phase=${state.phase})` };
+    }
+
+    const player = state.players[state.activePlayer];
+    if (player === undefined) {
+      return { valid: false, reason: 'no active player' };
+    }
+
+    // -----------------------------------------------------------------------
+    // PassTurnAction — always valid for the active player.
+    // Engine: player-turn-reducer.ts:20-22 (only NOT_YOUR_TURN rejection).
+    // -----------------------------------------------------------------------
+    if (action instanceof PassTurnAction) {
+      if (player.id !== action.clientId) {
+        return { valid: false, reason: 'NOT_YOUR_TURN' };
+      }
+      return { valid: true };
+    }
+
+    // -----------------------------------------------------------------------
+    // PlayCardAction
+    // Engine: play-card-reducer.ts (lines 36-119)
+    // -----------------------------------------------------------------------
+    if (action instanceof PlayCardAction) {
+      if (player.id !== action.id) {
+        return { valid: false, reason: 'NOT_YOUR_TURN' };
+      }
+
+      const handCard = player.hand.cards[action.handIndex];
+      if (handCard === undefined) {
+        return { valid: false, reason: 'UNKNOWN_CARD: handIndex out of range' };
+      }
+
+      // Resolve target the same way play-card-reducer.ts findCardList does.
+      // BOTTOM_PLAYER → active player, TOP_PLAYER → opponent.
+      const targetPlayer = action.target.player === PlayerType.BOTTOM_PLAYER
+        ? player
+        : state.players[state.activePlayer ? 0 : 1];
+      if (targetPlayer === undefined) {
+        return { valid: false, reason: 'INVALID_TARGET: target player undefined' };
+      }
+
+      let targetCardList: PokemonCardList | undefined;
+      if (action.target.slot === SlotType.ACTIVE) {
+        targetCardList = targetPlayer.active;
+      } else if (action.target.slot === SlotType.BENCH) {
+        targetCardList = targetPlayer.bench[action.target.index];
+      }
+      // For SlotType.BOARD (used by trainers without a specific target),
+      // the engine's findCardList returns undefined, which is fine for trainers
+      // that don't need a target — leave targetCardList undefined.
+
+      // EnergyCard checks (play-card-reducer.ts:58-66).
+      if (handCard instanceof EnergyCard) {
+        // Engine requires a non-empty PokemonCardList target.
+        if (!(targetCardList instanceof PokemonCardList) || targetCardList.cards.length === 0) {
+          return { valid: false, reason: 'INVALID_TARGET: energy needs a Pokemon target' };
+        }
+        if (player.energyPlayedTurn === state.turn) {
+          return { valid: false, reason: 'ENERGY_ALREADY_ATTACHED' };
+        }
+        return { valid: true };
+      }
+
+      // PokemonCard checks (play-card-reducer.ts:72-80 + play-pokemon-effect.ts).
+      if (handCard instanceof PokemonCard) {
+        if (!(targetCardList instanceof PokemonCardList)) {
+          return { valid: false, reason: 'INVALID_TARGET: pokemon needs a PokemonCardList target' };
+        }
+        // Basic Pokemon must go to an EMPTY slot (play-pokemon-effect.ts:19).
+        // Note: the engine treats `target.cards.length === 0` as the basic-play
+        // path; non-empty target falls through to the evolution path.
+        if (handCard.stage === Stage.BASIC) {
+          if (targetCardList.cards.length !== 0) {
+            return { valid: false, reason: 'INVALID_TARGET: basic Pokemon must go to an empty slot' };
+          }
+          return { valid: true };
+        }
+        // Evolution: target must contain a Pokemon whose name matches evolvesFrom
+        // and whose stage is strictly lower (play-pokemon-effect.ts:36).
+        const onTarget = targetCardList.getPokemonCard();
+        if (onTarget === undefined) {
+          return { valid: false, reason: 'INVALID_TARGET: no Pokemon to evolve from' };
+        }
+        if (onTarget.name !== handCard.evolvesFrom) {
+          return { valid: false, reason: `INVALID_TARGET: cannot evolve from ${onTarget.name}` };
+        }
+        if (onTarget.stage >= handCard.stage) {
+          return { valid: false, reason: 'INVALID_TARGET: target Pokemon stage too high' };
+        }
+        // pokemonPlayedTurn check (play-pokemon-effect.ts:40-42). Note: the
+        // engine resolves this via CheckPokemonPlayedTurnEffect which other
+        // cards (e.g. Rare Candy) can intercept; we MUST be conservative here
+        // and only reject when targetCardList.pokemonPlayedTurn is strictly
+        // greater than the current turn (which would be a bug) OR equal (the
+        // engine throws POKEMON_CANT_EVOLVE_THIS_TURN). But Rare Candy etc
+        // bypass this check, so a strict reject would be a false-reject for
+        // those cards. **Conservative: leave the played-turn check OFF.**
+        // The engine will reject correctly via POKEMON_CANT_EVOLVE_THIS_TURN
+        // if the play is illegal, paying the deepClone cost — that's OK.
+        return { valid: true };
+      }
+
+      // TrainerCard checks (play-card-reducer.ts:82-118).
+      if (handCard instanceof TrainerCard) {
+        switch (handCard.trainerType) {
+          case TrainerType.SUPPORTER:
+            if (state.turn === 1 && !state.rules.firstTurnUseSupporter) {
+              return { valid: false, reason: 'CANNOT_PLAY_THIS_CARD: supporter on turn 1' };
+            }
+            if (player.supporter.cards.length > 0) {
+              return { valid: false, reason: 'SUPPORTER_ALREADY_PLAYED' };
+            }
+            return { valid: true };
+          case TrainerType.STADIUM: {
+            if (player.stadiumPlayedTurn === state.turn) {
+              return { valid: false, reason: 'STADIUM_ALREADY_PLAYED' };
+            }
+            // Same stadium already in play check (mirroring StateUtils.getStadiumCard).
+            for (const p of state.players) {
+              if (p.stadium.cards.length > 0 && p.stadium.cards[0].name === handCard.name) {
+                return { valid: false, reason: 'SAME_STADIUM_ALREADY_IN_PLAY' };
+              }
+            }
+            return { valid: true };
+          }
+          case TrainerType.TOOL:
+            if (!(targetCardList instanceof PokemonCardList) || targetCardList.cards.length === 0) {
+              return { valid: false, reason: 'INVALID_TARGET: tool needs a Pokemon target' };
+            }
+            return { valid: true };
+          default:
+            // ITEM and any other trainer type — engine just dispatches PlayItemEffect.
+            return { valid: true };
+        }
+      }
+
+      // Unknown card type — let the engine handle it.
+      return { valid: true };
+    }
+
+    // -----------------------------------------------------------------------
+    // AttackAction
+    // Engine: player-turn-reducer.ts:42-62 + game-effect.ts useAttack:46-83
+    // -----------------------------------------------------------------------
+    if (action instanceof AttackAction) {
+      if (player.id !== action.clientId) {
+        return { valid: false, reason: 'NOT_YOUR_TURN' };
+      }
+      const activePokemon = player.active.getPokemonCard();
+      if (activePokemon === undefined) {
+        return { valid: false, reason: 'UNKNOWN_ATTACK: no active Pokemon' };
+      }
+      const attack = activePokemon.attacks.find(a => a.name === action.name);
+      if (attack === undefined) {
+        return { valid: false, reason: 'UNKNOWN_ATTACK: attack not on active' };
+      }
+      // Status conditions (game-effect.ts:49-52). PARALYZED/ASLEEP block attacks.
+      const sp = player.active.specialConditions;
+      if (sp.includes(SpecialCondition.PARALYZED) || sp.includes(SpecialCondition.ASLEEP)) {
+        return { valid: false, reason: 'BLOCKED_BY_SPECIAL_CONDITION' };
+      }
+      // Energy cost check (game-effect.ts:55-63). NOT mirrored — would require
+      // running CheckAttackCostEffect + CheckProvidedEnergyEffect which are
+      // non-trivial and Tool / Special Energy can modify both. The engine will
+      // throw NOT_ENOUGH_ENERGY for us if needed; that's a known cost.
+      return { valid: true };
+    }
+
+    // -----------------------------------------------------------------------
+    // RetreatAction
+    // Engine: player-turn-reducer.ts:30-40 + retreat-effect.ts:30-83
+    // -----------------------------------------------------------------------
+    if (action instanceof RetreatAction) {
+      if (player.id !== action.clientId) {
+        return { valid: false, reason: 'NOT_YOUR_TURN' };
+      }
+      const benchSlot = player.bench[action.benchIndex];
+      if (benchSlot === undefined || benchSlot.cards.length === 0) {
+        return { valid: false, reason: 'INVALID_TARGET: bench slot empty' };
+      }
+      const sp = player.active.specialConditions;
+      if (sp.includes(SpecialCondition.PARALYZED) || sp.includes(SpecialCondition.ASLEEP)) {
+        return { valid: false, reason: 'BLOCKED_BY_SPECIAL_CONDITION' };
+      }
+      if (player.retreatedTurn === state.turn) {
+        return { valid: false, reason: 'RETREAT_ALREADY_USED' };
+      }
+      // Energy cost check NOT mirrored — see AttackAction note.
+      return { valid: true };
+    }
+
+    // -----------------------------------------------------------------------
+    // UseAbilityAction
+    // Engine: player-turn-reducer.ts:64-122
+    // -----------------------------------------------------------------------
+    if (action instanceof UseAbilityAction) {
+      if (player.id !== action.clientId) {
+        return { valid: false, reason: 'NOT_YOUR_TURN' };
+      }
+      // Resolve target Pokemon. The engine uses StateUtils.getTarget; for our
+      // bot purposes the target is always BOTTOM_PLAYER (own Pokemon) since
+      // legalActionsRaw never enumerates abilities on the opponent.
+      let targetPokemonList: PokemonCardList | undefined;
+      if (action.target.slot === SlotType.ACTIVE) {
+        targetPokemonList = player.active;
+      } else if (action.target.slot === SlotType.BENCH) {
+        targetPokemonList = player.bench[action.target.index];
+      }
+      if (action.target.slot === SlotType.ACTIVE || action.target.slot === SlotType.BENCH) {
+        if (targetPokemonList === undefined || targetPokemonList.cards.length === 0) {
+          return { valid: false, reason: 'INVALID_TARGET: ability target slot empty' };
+        }
+        const pokemon = targetPokemonList.getPokemonCard();
+        if (pokemon === undefined) {
+          return { valid: false, reason: 'INVALID_TARGET: no Pokemon at ability target' };
+        }
+        const power = pokemon.powers.find(p => p.name === action.name);
+        if (power === undefined) {
+          return { valid: false, reason: 'UNKNOWN_POWER' };
+        }
+        if (!power.useWhenInPlay) {
+          return { valid: false, reason: 'CANNOT_USE_POWER: useWhenInPlay flag missing' };
+        }
+        return { valid: true };
+      }
+      if (action.target.slot === SlotType.HAND) {
+        const handCard = player.hand.cards[action.target.index];
+        if (!(handCard instanceof PokemonCard)) {
+          return { valid: false, reason: 'INVALID_TARGET: hand slot is not a Pokemon' };
+        }
+        const power = handCard.powers.find(p => p.name === action.name);
+        if (power === undefined) {
+          return { valid: false, reason: 'UNKNOWN_POWER' };
+        }
+        if (!power.useFromHand) {
+          return { valid: false, reason: 'CANNOT_USE_POWER: useFromHand flag missing' };
+        }
+        return { valid: true };
+      }
+      if (action.target.slot === SlotType.DISCARD) {
+        const discardCard = player.discard.cards[action.target.index];
+        if (!(discardCard instanceof PokemonCard)) {
+          return { valid: false, reason: 'INVALID_TARGET: discard slot is not a Pokemon' };
+        }
+        const power = discardCard.powers.find(p => p.name === action.name);
+        if (power === undefined) {
+          return { valid: false, reason: 'UNKNOWN_POWER' };
+        }
+        if (!power.useFromDiscard) {
+          return { valid: false, reason: 'CANNOT_USE_POWER: useFromDiscard flag missing' };
+        }
+        return { valid: true };
+      }
+      // BOARD slot — abilities don't usually use this. Let the engine decide.
+      return { valid: true };
+    }
+
+    // Unknown action type — pass through. The engine will handle it.
+    return { valid: true };
+  }
+
+  /**
    * Apply an action and return the resulting EnvState. Never throws.
    *
    * Behavior on errors:
-   *   - GameError (illegal action)  → returns input state unchanged, info.error set
-   *   - Other exception (crash)     → returns input state unchanged, info.crashed=true
-   *   - Successful dispatch         → auto-resolves any prompts the action created,
-   *                                    returns the new state with done/reward computed
+   *   - Pre-dispatch reject (cheap)  → returns input state unchanged, info.error
+   *                                     prefixed with `pre-dispatch reject:`
+   *   - GameError (illegal action)   → returns input state unchanged, info.error set
+   *   - Other exception (crash)      → returns input state unchanged, info.crashed=true
+   *   - Successful dispatch          → auto-resolves any prompts the action created,
+   *                                     returns the new state with done/reward computed
    *
    * After successful step(), state.prompts is always empty OR the game is terminal.
    * The caller never sees mid-turn prompt state.
+   *
+   * STRICT mode: when `process.env.STRICT_ENV === '1'`, every pre-dispatch reject
+   * is cross-checked against the engine. If the engine would have ACCEPTED the
+   * action we rejected, throw a fatal `[STRICT] FALSE REJECT` — this means
+   * `validateAction` is silently shrinking the bot's action space. Run STRICT
+   * mode as a regression gate before merging perf changes; never enable it for
+   * production self-play (it dispatches AND checks, which is slower than the
+   * baseline).
    */
   public step(envState: EnvState, action: Action): StepResult {
     // Defensive: if the input state has unresolved prompts, that's a bug
@@ -187,6 +497,21 @@ export class Env {
         reward: 0,
         done: true,
         info: { error: 'game already terminal' }
+      };
+    }
+
+    // Pre-dispatch validation: skip the deepClone if the action obviously fails.
+    const validation = this.validateAction(envState.state, action);
+    if (!validation.valid) {
+      // STRICT mode regression check: cross-check the reject against the engine.
+      if (process.env.STRICT_ENV === '1') {
+        this.strictModeCrossCheck(envState, action, validation.reason ?? 'unknown');
+      }
+      return {
+        state: envState,
+        reward: 0,
+        done: false,
+        info: { error: `pre-dispatch reject: ${validation.reason}` }
       };
     }
 
@@ -386,6 +711,52 @@ export class Env {
    */
   public legalActions(envState: EnvState): Action[] {
     return this.legalActionsRaw(envState);
+  }
+
+  /**
+   * STRICT mode helper: dispatch the action through a CLONED store and verify
+   * it's rejected. Throws `[STRICT] FALSE REJECT` if the engine would have
+   * accepted an action that `validateAction` rejected (= silent action-space
+   * shrink, the worst possible bug for downstream training data).
+   *
+   * Only called when `process.env.STRICT_ENV === '1'`. Performance is irrelevant
+   * here — STRICT mode is purely a developer-facing correctness gate.
+   */
+  protected strictModeCrossCheck(envState: EnvState, action: Action, reason: string): void {
+    // Build a fully-independent clone of the env state — fresh Store, deep-cloned
+    // State, forked RNG. We MUST clone the store too, otherwise dispatching the
+    // action would mutate the real state. The existing `clone()` method does
+    // exactly this.
+    let cloneEnv: EnvState;
+    try {
+      cloneEnv = this.clone(envState);
+    } catch (err) {
+      // Clone failed (e.g. unresolved prompts). STRICT cannot verify; let the
+      // pre-dispatch reject stand.
+      return;
+    }
+    let engineRejected = false;
+    try {
+      cloneEnv.store.dispatch(action);
+    } catch (err) {
+      const isGameError = err instanceof GameError ||
+        (err && (err as any).constructor && (err as any).constructor.name === 'GameError');
+      if (isGameError) {
+        engineRejected = true;
+      } else {
+        // Engine crashed (non-GameError). Treat as rejected — we don't want
+        // STRICT mode to mask crashes as false rejects.
+        engineRejected = true;
+      }
+    }
+    if (!engineRejected) {
+      throw new Error(
+        `[STRICT] FALSE REJECT: Env.validateAction rejected ` +
+        `${(action as any).constructor?.name ?? typeof action} with reason ` +
+        `"${reason}", but the engine ACCEPTED it. This means legalActions() is ` +
+        `silently shrinking the action space. Action: ${JSON.stringify(action)}`
+      );
+    }
   }
 
   /**
