@@ -54,6 +54,8 @@ import { SelectPrompt } from '../../../game/store/prompts/select-prompt';
 import { OrderCardsPrompt } from '../../../game/store/prompts/order-cards-prompt';
 import { PutDamagePrompt } from '../../../game/store/prompts/put-damage-prompt';
 import { MoveDamagePrompt } from '../../../game/store/prompts/move-damage-prompt';
+import { ChooseEnergyPrompt, EnergyMap } from '../../../game/store/prompts/choose-energy-prompt';
+import { CardType } from '../../../game/store/card/card-types';
 import { GameError } from '../../../game/game-error';
 import { SeededRNG } from '../../seeded-rng';
 import { SeededArbiter } from '../../seeded-arbiter';
@@ -695,15 +697,98 @@ function buildResolveAction(ctx: CardTestContext, prompt: Prompt<any>): ResolveP
     return new ResolvePromptAction(prompt.id, result);
   }
 
-  // MoveDamagePrompt — pick the first legal source/destination pair.
-  // Munkidori's Adrena-Brain creates these. Phase 1 picks zero damage moved
-  // (the prompt allowsCancel by default for Munkidori) — semantic move logic
-  // is L5 territory.
+  // MoveDamagePrompt — pick a legal source/destination pair and return a
+  // single 1-counter transfer. Strategy depends on `prompt.playerType`:
+  //   - BOTTOM_PLAYER / TOP_PLAYER: same-side move (Sinister Hand pattern)
+  //   - ANY: cross-side move (Munkidori Adrena-Brain pattern, bias to
+  //     player's side → opponent's side; the card filters in callback)
+  //
+  // Mirrors env.ts handler so harness tests and self-play behave identically.
+  // Updated in Plan 01-05: previously this returned null/empty (cancel),
+  // which made Adrena-Brain L5 assertions impossible to verify.
   if (prompt instanceof MoveDamagePrompt) {
-    if (prompt.options.allowCancel) {
+    const player = state.players.find(p => p.id === prompt.playerId);
+    const opp = state.players.find(p => p.id !== prompt.playerId);
+    if (player === undefined || opp === undefined) {
+      if (prompt.options.allowCancel) return new ResolvePromptAction(prompt.id, null);
+      return new ResolvePromptAction(prompt.id, []);
+    }
+    const collectFromPlayer = (p: Player, who: PlayerType) => {
+      const out: { target: CardTarget; pcl: PokemonCardList }[] = [];
+      if (prompt.slots.includes(SlotType.ACTIVE) && p.active.cards.length > 0) {
+        out.push({ target: { player: who, slot: SlotType.ACTIVE, index: 0 }, pcl: p.active });
+      }
+      if (prompt.slots.includes(SlotType.BENCH)) {
+        for (let i = 0; i < p.bench.length; i++) {
+          if (p.bench[i].cards.length > 0) {
+            out.push({ target: { player: who, slot: SlotType.BENCH, index: i }, pcl: p.bench[i] });
+          }
+        }
+      }
+      return out;
+    };
+    const playerSlots = collectFromPlayer(player, PlayerType.BOTTOM_PLAYER);
+    const oppSlots = collectFromPlayer(opp, PlayerType.TOP_PLAYER);
+
+    let sourceCandidates: { target: CardTarget; pcl: PokemonCardList }[] = [];
+    let destCandidates: { target: CardTarget; pcl: PokemonCardList }[] = [];
+
+    if (prompt.playerType === PlayerType.BOTTOM_PLAYER) {
+      sourceCandidates = playerSlots;
+      destCandidates = playerSlots;
+    } else if (prompt.playerType === PlayerType.TOP_PLAYER) {
+      sourceCandidates = oppSlots;
+      destCandidates = oppSlots;
+    } else {
+      // ANY: bias to cross-side (player → opponent).
+      sourceCandidates = playerSlots;
+      destCandidates = oppSlots;
+    }
+
+    const sourceIdx = sourceCandidates.findIndex(t => t.pcl.damage >= 10);
+    if (sourceIdx === -1) {
+      if (prompt.options.allowCancel) return new ResolvePromptAction(prompt.id, null);
+      return new ResolvePromptAction(prompt.id, []);
+    }
+    const source = sourceCandidates[sourceIdx];
+    const destIdx = destCandidates.findIndex(t => t.pcl !== source.pcl);
+    if (destIdx === -1) {
+      if (prompt.options.allowCancel) return new ResolvePromptAction(prompt.id, null);
+      return new ResolvePromptAction(prompt.id, []);
+    }
+    return new ResolvePromptAction(prompt.id, [{
+      from: source.target,
+      to: destCandidates[destIdx].target,
+    }]);
+  }
+
+  // ChooseEnergyPrompt — greedy match concrete cost types, then fill
+  // colorless slots. Mirrors env.ts. Added in Plan 01-05 so Crispin and
+  // Night Stretcher (when used as energy tutors) can be exercised in L4/L5
+  // tests via the harness.
+  if (prompt instanceof ChooseEnergyPrompt) {
+    const pool: EnergyMap[] = prompt.energy.slice();
+    const picked: EnergyMap[] = [];
+    const cost = prompt.cost.slice();
+    for (let i = cost.length - 1; i >= 0; i--) {
+      const c = cost[i];
+      if (c === CardType.COLORLESS) continue;
+      const idx = pool.findIndex(e => e.provides.includes(c));
+      if (idx === -1) continue;
+      picked.push(pool[idx]);
+      pool.splice(idx, 1);
+      cost.splice(i, 1);
+    }
+    const colorlessNeeded = cost.filter(c => c === CardType.COLORLESS).length;
+    for (let i = 0; i < colorlessNeeded && pool.length > 0; i++) {
+      picked.push(pool[0]);
+      pool.splice(0, 1);
+    }
+    if (picked.length === 0 && prompt.options.allowCancel) {
       return new ResolvePromptAction(prompt.id, null);
     }
-    return new ResolvePromptAction(prompt.id, []);
+    const indices = picked.map(e => prompt.energy.indexOf(e)).filter(i => i >= 0);
+    return new ResolvePromptAction(prompt.id, indices);
   }
 
   // Unknown prompt type — best-effort null. The test will likely fail an

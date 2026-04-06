@@ -1167,16 +1167,24 @@ export class Env {
     //     BW2 Sinister Hand, Munkidori TWM Adrena-Brain, Tapu Lele Magical
     //     Swap, Banette-GX Shady Move, etc.
     //
-    //     Strategy: scan targetsList for the first slot with damage > 0
-    //     (source) and the first DIFFERENT slot (destination). If we find
-    //     such a pair, return a single 10-damage transfer. If no source has
-    //     damage, cancel (allowCancel=true) or return [] (otherwise).
+    //     Strategy depends on `prompt.playerType`:
+    //       - BOTTOM_PLAYER or TOP_PLAYER: same-side move (Sinister Hand
+    //         pattern). Pick first damaged source, first different
+    //         destination on the same side.
+    //       - ANY: cross-side move (Munkidori Adrena-Brain pattern, where
+    //         the card filters in the callback to enforce direction). Pick
+    //         a source on the prompt-creator's side AND a destination on
+    //         the opponent's side, biasing toward the cross-side direction
+    //         the most common ANY-typed card actually wants.
+    //
+    //     If we can't find a valid pair, cancel (allowCancel=true) or
+    //     return [] (otherwise).
     //
     //     This is intentionally minimal — Phase 1's job is "no silent
-    //     abort, the engine actually moves a counter". Plan 01-05's L4/L5
-    //     scenario tests verify the assertion that MoveDamagePrompt actually
-    //     mutates state. A smarter strategy (move multiple counters, pick
-    //     the most damaged source) is L7/L8 territory.
+    //     abort, the engine actually moves a counter". Plan 01-05's L5
+    //     semantic assertions verify the move lands. Smarter strategies
+    //     (move multiple counters, pick the most damaged source) are L7/L8
+    //     territory.
     if (prompt instanceof MoveDamagePrompt) {
       const player = state.players.find(p => p.id === prompt.playerId);
       const opp = state.players.find(p => p.id !== prompt.playerId);
@@ -1184,47 +1192,58 @@ export class Env {
         if (prompt.options.allowCancel) return new ResolvePromptAction(prompt.id, null);
         return new ResolvePromptAction(prompt.id, []);
       }
-      const targetsList: { target: CardTarget; pcl: PokemonCardList }[] = [];
-      const collect = (p: Player, who: PlayerType) => {
+      const collectFromPlayer = (p: Player, who: PlayerType) => {
+        const out: { target: CardTarget; pcl: PokemonCardList }[] = [];
         if (prompt.slots.includes(SlotType.ACTIVE) && p.active.cards.length > 0) {
-          targetsList.push({ target: { player: who, slot: SlotType.ACTIVE, index: 0 }, pcl: p.active });
+          out.push({ target: { player: who, slot: SlotType.ACTIVE, index: 0 }, pcl: p.active });
         }
         if (prompt.slots.includes(SlotType.BENCH)) {
           for (let i = 0; i < p.bench.length; i++) {
             if (p.bench[i].cards.length > 0) {
-              targetsList.push({ target: { player: who, slot: SlotType.BENCH, index: i }, pcl: p.bench[i] });
+              out.push({ target: { player: who, slot: SlotType.BENCH, index: i }, pcl: p.bench[i] });
             }
           }
         }
+        return out;
       };
-      if (prompt.playerType === PlayerType.BOTTOM_PLAYER || prompt.playerType === PlayerType.ANY) {
-        collect(player, PlayerType.BOTTOM_PLAYER);
+      const playerSlots = collectFromPlayer(player, PlayerType.BOTTOM_PLAYER);
+      const oppSlots = collectFromPlayer(opp, PlayerType.TOP_PLAYER);
+
+      let sourceCandidates: { target: CardTarget; pcl: PokemonCardList }[] = [];
+      let destCandidates: { target: CardTarget; pcl: PokemonCardList }[] = [];
+
+      if (prompt.playerType === PlayerType.BOTTOM_PLAYER) {
+        sourceCandidates = playerSlots;
+        destCandidates = playerSlots;
+      } else if (prompt.playerType === PlayerType.TOP_PLAYER) {
+        sourceCandidates = oppSlots;
+        destCandidates = oppSlots;
+      } else {
+        // ANY: bias toward cross-side direction. Source = player's side,
+        // destination = opponent's side. This matches Munkidori
+        // Adrena-Brain's "from your Pokemon to your opponent's Pokemon".
+        // For ANY-typed prompts where the card actually wants same-side,
+        // the callback's StateUtils.getTarget call will resolve correctly
+        // either way — we just need SOME legal transfer to fire.
+        sourceCandidates = playerSlots;
+        destCandidates = oppSlots;
       }
-      if (prompt.playerType === PlayerType.TOP_PLAYER || prompt.playerType === PlayerType.ANY) {
-        collect(opp, PlayerType.TOP_PLAYER);
-      }
-      // Find first damaged source.
-      const sourceIdx = targetsList.findIndex(t => t.pcl.damage >= 10);
+
+      const sourceIdx = sourceCandidates.findIndex(t => t.pcl.damage >= 10);
       if (sourceIdx === -1) {
-        // No damage to move. Cancel if allowed; otherwise return empty.
         if (prompt.options.allowCancel) return new ResolvePromptAction(prompt.id, null);
         return new ResolvePromptAction(prompt.id, []);
       }
-      // Find first different slot for destination.
-      const destIdx = targetsList.findIndex((t, idx) => idx !== sourceIdx);
+      const source = sourceCandidates[sourceIdx];
+      // Pick destination — must be different from source (same identity check).
+      const destIdx = destCandidates.findIndex(t => t.pcl !== source.pcl);
       if (destIdx === -1) {
-        // Only one Pokemon — nowhere to move damage to.
         if (prompt.options.allowCancel) return new ResolvePromptAction(prompt.id, null);
         return new ResolvePromptAction(prompt.id, []);
       }
-      // Single transfer (1 damage counter). The prompt's validate method
-      // checks both endpoints belong to the right player(s) and slot types,
-      // and that result.length is in [min, max]. options.min defaults to 0
-      // and options.max defaults to undefined (no upper bound), so a
-      // single-transfer result satisfies the bounds for every card we know.
       const transfer: DamageTransfer = {
-        from: targetsList[sourceIdx].target,
-        to: targetsList[destIdx].target,
+        from: source.target,
+        to: destCandidates[destIdx].target,
       };
       return new ResolvePromptAction(prompt.id, [transfer]);
     }

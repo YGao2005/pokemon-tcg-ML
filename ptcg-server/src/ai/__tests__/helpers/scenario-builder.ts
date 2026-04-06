@@ -345,14 +345,20 @@ export class ScenarioBuilder {
       p.deck.cards.push(filler);
     }
 
-    // Prizes — pull from the deck. We honor the prizesRemaining knob: a
-    // value < 6 means the player has already taken (6 - n) prizes, so we
-    // place only n prize CardLists.
+    // Prizes — pull from the END of the deck (not the top), so the
+    // caller's `deckTop` cards are preserved. The prize identity is
+    // arbitrary for L4/L5 tests; what matters is the count and that the
+    // deck-top cards are still where the test expects them.
+    //
+    // We honor the prizesRemaining knob: a value < 6 means the player has
+    // already taken (6 - n) prizes, so we place only n prize CardLists.
     for (let i = 0; i < ps.prizesRemaining; i++) {
       const prize = new CardList();
       prize.isSecret = true;
       if (p.deck.cards.length > 0) {
-        p.deck.moveTo(prize, 1);
+        // Pop the LAST card from the deck and put it in the prize.
+        const last = p.deck.cards.pop()!;
+        prize.cards.push(last);
       }
       p.prizes.push(prize);
     }
