@@ -3,7 +3,8 @@
   "spec_files": [
     "env.spec.js",
     "selfplay.spec.js",
-    "dragapult-cards.spec.js"
+    "dragapult-cards.spec.js",
+    "env-strict-mode.spec.js"
   ],
   "stopSpecOnExpectationFailure": false,
   "random": false

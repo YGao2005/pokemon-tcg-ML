@@ -710,7 +710,23 @@ export class Env {
    * filtering — Task 3 will add the filter via validateAction.
    */
   public legalActions(envState: EnvState): Action[] {
-    return this.legalActionsRaw(envState);
+    const raw = this.legalActionsRaw(envState);
+    const filtered: Action[] = [];
+    for (const action of raw) {
+      // Preserve raw order: filter is stable so the seeded reproducibility
+      // contract holds (same seed → same filtered candidates → same picks).
+      if (this.validateAction(envState.state, action).valid) {
+        filtered.push(action);
+      }
+    }
+    if (filtered.length === 0) {
+      // Should never happen — at minimum PassTurnAction is always pre-dispatch
+      // valid during a player's turn. Fall back to raw so RandomBot doesn't
+      // crash, and log a warning so the regression is visible.
+      console.error('[env.legalActions] WARNING: filtered set is empty, falling back to raw set');
+      return raw;
+    }
+    return filtered;
   }
 
   /**
